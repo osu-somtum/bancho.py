@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import app.state
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.base import RequestResponseEndpoint
@@ -36,9 +37,10 @@ class MetricsMiddleware(BaseHTTPMiddleware):
         )
 
         url = f"{request.headers['host']}{request['path']}"
+        ip = app.state.services.ip_resolver.get_ip(request.headers)
 
         log(f"[{request.method}] {response.status_code} {url}", col, end=" | ")
-        printc(f"Request took: {magnitude_fmt_time(time_elapsed)}", Ansi.LBLUE)
+        printc(f"Request took: {magnitude_fmt_time(time_elapsed)}", end="", col=Ansi.LBLUE)
         printc(f" ({ip})", Ansi.GRAY)
 
         response.headers["process-time"] = str(round(time_elapsed) / 1e6)
