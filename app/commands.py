@@ -886,7 +886,7 @@ async def user(ctx: Context) -> str | None:
     )
 
 
-@command(Privileges.ADMINISTRATOR, hidden=True)
+@command(Privileges.MODERATOR, hidden=True)
 async def restrict(ctx: Context) -> str | None:
     """Restrict a specified player's account, with a reason."""
     if len(ctx.args) < 2:
@@ -917,7 +917,7 @@ async def restrict(ctx: Context) -> str | None:
     return f"{target} was restricted."
 
 
-@command(Privileges.ADMINISTRATOR, hidden=True)
+@command(Privileges.MODERATOR, hidden=True)
 async def unrestrict(ctx: Context) -> str | None:
     """Unrestrict a specified player's account, with a reason."""
     if len(ctx.args) < 2:
@@ -979,7 +979,7 @@ async def alertuser(ctx: Context) -> str | None:
 # NOTE: this is pretty useless since it doesn't switch anything other
 # than the c[e4].ppy.sh domains; it exists on bancho as a tournament
 # server switch mechanism, perhaps we could leverage this in the future.
-@command(Privileges.ADMINISTRATOR, hidden=True)
+@command(Privileges.DEVELOPER, hidden=True)
 async def switchserv(ctx: Context) -> str | None:
     """Switch your client's internal endpoints to a specified IP address."""
     if len(ctx.args) != 1:
@@ -991,7 +991,7 @@ async def switchserv(ctx: Context) -> str | None:
     return "Have a nice journey.."
 
 
-@command(Privileges.ADMINISTRATOR, aliases=["restart"])
+@command(Privileges.DEVELOPER, aliases=["restart"])
 async def shutdown(ctx: Context) -> str | None | NoReturn:
     """Gracefully shutdown the server."""
     if ctx.trigger == "restart":
@@ -1205,7 +1205,7 @@ async def reload(ctx: Context) -> str | None:
     return f"Reloaded {mod.__name__}"
 
 
-@command(Privileges.UNRESTRICTED)
+@command(Privileges.DEVELOPER)
 async def server(ctx: Context) -> str | None:
     """Retrieve performance data about the server."""
 
