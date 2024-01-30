@@ -43,6 +43,7 @@ from app.constants.mods import Mods
 from app.constants.mods import SPEED_CHANGING_MODS
 from app.constants.privileges import ClanPrivileges
 from app.constants.privileges import Privileges
+from app.discord import Webhook, Embed
 from app.objects.beatmap import Beatmap
 from app.objects.beatmap import ensure_local_osu_file
 from app.objects.beatmap import RankedStatus
@@ -679,6 +680,16 @@ async def _map(ctx: Context) -> str | None:
             {"map_ids": map_ids},
         )
 
+    if webhook_url := app.settings.DISCORD_NOMINATION_WEBHOOK:
+        name = f"{bmap.artist} - {bmap.title}{f' [{bmap.version}]' if ctx.args[1] == 'map' else ''}"
+        color = 52478 if new_status == RankedStatus.Ranked else 16738218 if new_status == RankedStatus.Loved else 0
+        embed = Embed(title="", description=f"[{name}]({bmap.url}) is now {'ranked' if new_status == RankedStatus.Ranked else 'loved' if new_status == RankedStatus.Loved else 'unranked'}!", timestamp=datetime.utcnow(), color=color)
+        embed.set_author(name=ctx.player.name, icon_url=ctx.player.avatar_url, url=ctx.player.url)
+        embed.set_image(url=f"https://assets.ppy.sh/beatmaps/{bmap.set_id}/covers/card.jpg")
+        embed.set_footer(text="Nomination Tools")
+        webhook = Webhook(webhook_url, embeds=[embed])
+        await webhook.post()
+
     return f"{bmap.embed} updated to {new_status!s}."
 
 
@@ -768,11 +779,6 @@ async def addnote(ctx: Context) -> str | None:
 # reasons in many moderative commands.
 SHORTHAND_REASONS = {
     "aa": "having their appeal accepted",
-    "cc": "using a modified osu! client",
-    "3p": "using 3rd party programs",
-    "rx": "using 3rd party programs (relax)",
-    "tw": "using 3rd party programs (timewarp)",
-    "au": "using 3rd party programs (auto play)",
 }
 
 
