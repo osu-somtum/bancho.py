@@ -39,6 +39,7 @@ class MetricsMiddleware(BaseHTTPMiddleware):
 
         log(f"[{request.method}] {response.status_code} {url}", col, end=" | ")
         printc(f"Request took: {magnitude_fmt_time(time_elapsed)}", Ansi.LBLUE)
+        printc(f" ({ip})", Ansi.GRAY)
 
         response.headers["process-time"] = str(round(time_elapsed) / 1e6)
         return response
