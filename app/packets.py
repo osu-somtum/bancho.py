@@ -774,34 +774,17 @@ def change_username(old: str, new: str) -> bytes:
         (f"{old}>>>>{new}", osuTypes.string),
     )
 
-
-BOT_STATUSES = (
-    (3, "the source code.."),  # editing
-    (6, "geohot livestreams.."),  # watching
-    (6, "asottile tutorials.."),  # watching
-    (6, "over the server.."),  # watching
-    (8, "out new features.."),  # testing
-    (9, "a pull request.."),  # submitting
-)
-
 # since the bot is always online and is
 # also automatically added to all player's
 # friends list, their stats are requested
 # *very* frequently, and should be cached.
-# NOTE: this is cleared once in a while by
-# `bg_loops.reroll_bot_status` to keep fresh.
-
-
 @cache
 def bot_stats(player: Player) -> bytes:
-    # pick at random from list of potential statuses.
-    status_id, status_txt = random.choice(BOT_STATUSES)
-
     return write(
         ServerPackets.USER_STATS,
         (player.id, osuTypes.i32),  # id
-        (status_id, osuTypes.u8),  # action
-        (status_txt, osuTypes.string),  # info_text
+        (2, osuTypes.u8),  # action
+        ("with catnip...", osuTypes.string),  # info_text
         ("", osuTypes.string),  # map_md5
         (0, osuTypes.i32),  # mods
         (0, osuTypes.u8),  # mode
@@ -1121,7 +1104,7 @@ def bot_presence(player: Player) -> bytes:
         (245, osuTypes.u8),  # satellite provider
         (31, osuTypes.u8),
         (1234.0, osuTypes.f32),  # send coordinates waaay
-        (4321.0, osuTypes.f32),  # off the map for the bot
+        (4321.0, osuTypes.f32),  # off the map for the botid 
         (0, osuTypes.i32),
     )
 
