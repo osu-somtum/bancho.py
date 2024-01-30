@@ -5,8 +5,8 @@ services:
 
   mysql:
     image: mysql:latest
-    # ports:
-    #   - ${DB_PORT}:${DB_PORT}
+    ports:
+      - ${DB_PORT}:${DB_PORT}
     environment:
       MYSQL_USER: ${DB_USER}
       MYSQL_PASSWORD: ${DB_PASS}
