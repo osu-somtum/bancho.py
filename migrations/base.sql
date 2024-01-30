@@ -163,6 +163,8 @@ create table map_requests
 	id int auto_increment
 		primary key,
 	map_id int not null,
+	requested_status varchar(6) not null,
+	comment varchar(512) not null,
 	player_id int not null,
 	datetime datetime not null,
 	active tinyint(1) not null

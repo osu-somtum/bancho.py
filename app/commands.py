@@ -531,8 +531,11 @@ async def _with(ctx: Context) -> str | None:
 @command(Privileges.UNRESTRICTED, aliases=["req"])
 async def request(ctx: Context) -> str | None:
     """Request a beatmap for nomination."""
-    if ctx.args:
-        return "Invalid syntax: !request"
+    if len(ctx.args) < 1 or ctx.args[0] not in ("ranked", "loved"):
+        return "Invalid syntax: !request <ranked/loved> [comment]"
+
+    if len(ctx.args) == 2 and len(ctx.args[1]) > 512:
+        return "The comment may not exceed a length of 512 characters."
 
     if ctx.player.last_np is None or time.time() >= ctx.player.last_np["timeout"]:
         return "Please /np a map first!"
@@ -540,13 +543,20 @@ async def request(ctx: Context) -> str | None:
     bmap = ctx.player.last_np["bmap"]
 
     if bmap.status != RankedStatus.Pending:
-        return "Only pending maps may be requested for status change."
+        return "Only pending/graveyarded maps may be requested for status change."
+
+    for b in bmap.set.maps:
+        if await app.state.services.database.fetch_one(
+            "SELECT 1 FROM map_requests WHERE map_id = :map_id AND active = 1",
+            {"map_id": b.id}
+        ):
+            return "A map from this mapset has already been requested! Our BNs will always check the full mapset of requested maps."
 
     await app.state.services.database.execute(
-        "INSERT INTO map_requests "
-        "(map_id, player_id, datetime, active) "
-        "VALUES (:map_id, :user_id, NOW(), 1)",
-        {"map_id": bmap.id, "user_id": ctx.player.id},
+        "INSERT INTO map_requests"
+        "(map_id, requested_status, comment, player_id, datetime, active) "
+        "VALUES (:map_id, :status, :comment, :user_id, NOW(), 1)",
+        {"map_id": bmap.id, "status": ctx.args[0], "comment": " ".join(ctx.args[1:]), "user_id": ctx.player.id},
     )
 
     return "Request submitted."
@@ -584,7 +594,7 @@ async def requests(ctx: Context) -> str | None:
         return "Invalid syntax: !requests"
 
     rows = await app.state.services.database.fetch_all(
-        "SELECT map_id, player_id, datetime FROM map_requests WHERE active = 1",
+        "SELECT id, map_id, requested_status, comment, player_id, datetime FROM map_requests WHERE active = 1",
     )
 
     if not rows:
@@ -592,21 +602,33 @@ async def requests(ctx: Context) -> str | None:
 
     l = [f"Total requests: {len(rows)}"]
 
-    for map_id, player_id, dt in rows:
+    for id, map_id, requested_status, comment, player_id, dt in rows:
         # find player & map for each row, and add to output.
-        player = await app.state.sessions.players.from_cache_or_sql(id=player_id)
-        if not player:
+        if not (p := await app.state.sessions.players.from_cache_or_sql(id=player_id)):
             l.append(f"Failed to find requesting player ({player_id})?")
             continue
 
-        bmap = await Beatmap.from_bid(map_id)
-        if not bmap:
+        if not (bmap := await Beatmap.from_bid(map_id)):
             l.append(f"Failed to find requested map ({map_id})?")
             continue
 
-        l.append(f"[{player.embed} @ {dt:%b %d %I:%M%p}] {bmap.embed}.")
+        l.append(f"#{id}: {bmap.embed}\n({dt:%b %d %I:%M%p}) Requested for {requested_status} by {p.embed}. {'No additional comment was specified.' if comment == '' else f'Comment: {comment}'}")
 
     return "\n".join(l)
+
+
+@command(Privileges.NOMINATOR, aliases=["dr", "declinereq"], hidden=True)
+async def declinerequest(ctx: Context) -> Optional[str]:
+    """Declines a map request by it's ID."""
+    if len(ctx.args) != 1:
+        return "Invalid syntax: !declinerequest <ID>"
+    
+    await app.state.services.database.execute(
+        "UPDATE map_requests SET active = 0 WHERE id = :id",
+        {"id": ctx.args[0]}
+    )
+
+    return f"Map request #{ctx.args[0]} was declined."
 
 
 _status_str_to_int_map = {"unrank": 0, "rank": 2, "love": 5}
