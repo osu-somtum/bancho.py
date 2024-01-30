@@ -710,19 +710,19 @@ ACTION_STRINGS = {
 @command(Privileges.MODERATOR, hidden=True)
 async def notes(ctx: Context) -> str | None:
     """Retrieve the logs of a specified player by name."""
-    if len(ctx.args) != 2 or not ctx.args[1].isdecimal():
-        return "Invalid syntax: !notes <name> <days_back>"
+    if len(ctx.args) < 1 or len(ctx.args) > 2 or len(ctx.args) == 1 and not ctx.args[1].isdecimal():
+        return "Invalid syntax: !notes <name> [days back]"
 
     target = await app.state.sessions.players.from_cache_or_sql(name=ctx.args[0])
     if not target:
         return f'"{ctx.args[0]}" not found.'
 
-    days = int(ctx.args[1])
+    days = int(ctx.args[1]) if len(ctx.args) == 2 else 365
 
     if days > 365:
         return "Please contact a developer to fetch >365 day old information."
     elif days <= 0:
-        return "Invalid syntax: !notes <name> <days_back>"
+        return "Invalid syntax: !notes <name> [days back]"
 
     res = await app.state.services.database.fetch_all(
         "SELECT `action`, `msg`, `time`, `from` "
