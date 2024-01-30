@@ -9,7 +9,7 @@ upstream bancho {
 }
 
 server {
-	listen 443 ssl;
+	listen 80;
 	server_name c.${DOMAIN} ce.${DOMAIN} c4.${DOMAIN} osu.${DOMAIN} b.${DOMAIN} api.${DOMAIN};
 	client_max_body_size 20M;
 
@@ -24,7 +24,7 @@ server {
 }
 
 server {
-	listen 443 ssl;
+	listen 80;
 	server_name assets.${DOMAIN};
 
 	location / {
@@ -34,7 +34,7 @@ server {
 }
 
 server {
-	listen 443 ssl;
+	listen 80;
 	server_name a.${DOMAIN};
 
 	location / {
