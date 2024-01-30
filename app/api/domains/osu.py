@@ -1826,8 +1826,8 @@ async def register_account(
     # are safe for registration.
     errors: Mapping[str, list[str]] = defaultdict(list)
 
-    # Disable in-game registration if enabled
-    if app.settings.DISABLE_INGAME_REGISTRATION:
+    # Disallow in-game registration if enabled
+    if app.settings.DISALLOW_INGAME_REGISTRATION:
         errors["password"].append("The in-game registration is disabled. Please register on the website.")
         errors = {k: ["\n".join(v)] for k, v in errors.items()}
         errors_full = {"form_error": {"user": errors}}
