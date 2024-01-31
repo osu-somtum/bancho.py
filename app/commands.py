@@ -542,8 +542,8 @@ async def request(ctx: Context) -> str | None:
 
     bmap = ctx.player.last_np["bmap"]
 
-    if bmap.status != RankedStatus.Pending:
-        return "Only pending/graveyarded maps may be requested for status change."
+    if bmap.status != RankedStatus.Pending and bmap.status != RankedStatus.Loved:
+        return "Only loved/pending/graveyarded maps may be requested for status change."
 
     for b in bmap.set.maps:
         if await app.state.services.database.fetch_one(
