@@ -1724,18 +1724,27 @@ async def checkUpdates(
 
 if app.settings.REDIRECT_OSU_URLS:
 
-    async def osu_redirect(file_path: str) -> Response:
+    async def osu_redirect_beatmaps(file_path: str) -> Response:
         return RedirectResponse(
-            url=f"https://osu.ppy.sh{file_path}",
+            url=f"https://osu.ppy.sh/b/{file_path}",
             status_code=status.HTTP_301_MOVED_PERMANENTLY,
         )
 
-    for pattern in (
-        "/beatmapsets/{file_path:path}",
-        "/beatmaps/{file_path:path}",
-        "/community/forums/topics/{file_path:path}",
-    ):
-        router.get(pattern)(osu_redirect)
+    async def osu_redirect_beatmapsets(file_path: str) -> Response:
+        return RedirectResponse(
+            url=f"https://osu.ppy.sh/s/{file_path}",
+            status_code=status.HTTP_301_MOVED_PERMANENTLY,
+        )
+
+    async def osu_redirect_topic(file_path: str) -> Response:
+        return RedirectResponse(
+            url=f"https://osu.ppy.sh/community/forums/topics/{file_path}",
+            status_code=status.HTTP_301_MOVED_PERMANENTLY,
+        )
+
+    router.get("/beatmaps/{file_path:path}")(osu_redirect_beatmaps)
+    router.get("/beatmapsets/{file_path:path}")(osu_redirect_beatmaps)
+    router.get("/community/forums/topics/{file_path:path}")(osu_redirect_beatmaps)
 
 
 @router.get("/ss/{screenshot_id}.{extension}")
