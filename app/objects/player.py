@@ -4,7 +4,7 @@ import asyncio
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from enum import Enum
 from enum import IntEnum
 from enum import unique
@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 from typing import TypedDict
 
 import databases.core
+import timeago
 
 import app.packets
 import app.settings
@@ -24,7 +25,7 @@ from app.constants.gamemodes import GameMode
 from app.constants.mods import Mods
 from app.constants.privileges import ClientPrivileges
 from app.constants.privileges import Privileges
-from app.discord import Webhook
+from app.discord import Webhook, Embed
 from app.logging import Ansi
 from app.logging import log
 from app.objects.channel import Channel
@@ -491,10 +492,14 @@ class Player:
 
         log(log_msg, Ansi.LRED)
 
-        webhook_url = app.settings.DISCORD_AUDIT_LOG_WEBHOOK
-        if webhook_url:
-            webhook = Webhook(webhook_url, content=log_msg)
-            asyncio.create_task(webhook.post())
+        if app.settings.DISCORD_AUDIT_LOG_WEBHOOK:
+            embed = Embed(title="Restriction", timestamp=datetime.utcnow(), color=16711680)
+            embed.add_field("Restricted Player", f"[{self.name}]({self.url})", True)
+            embed.add_field("Reason", reason, True)
+            embed.set_footer(text="Moderation Tools")
+            embed.set_author(name=admin.name, icon_url=admin.avatar_url, url=admin.url)
+            webhook = Webhook(app.settings.DISCORD_AUDIT_LOG_WEBHOOK, embeds=[embed])
+            await webhook.post()
 
         # refresh their client state
         if self.is_online:
@@ -529,10 +534,14 @@ class Player:
 
         log(log_msg, Ansi.LRED)
 
-        webhook_url = app.settings.DISCORD_AUDIT_LOG_WEBHOOK
-        if webhook_url:
-            webhook = Webhook(webhook_url, content=log_msg)
-            asyncio.create_task(webhook.post())
+        if app.settings.DISCORD_AUDIT_LOG_WEBHOOK:
+            embed = Embed(title="Unrestriction", timestamp=datetime.utcnow(), color=41216)
+            embed.add_field("Restricted Player", f"[{self.name}]({self.url})", True)
+            embed.add_field("Reason", reason, True)
+            embed.set_footer(text="Moderation Tools")
+            embed.set_author(name=admin.name, icon_url=admin.avatar_url, url=admin.url)
+            webhook = Webhook(app.settings.DISCORD_AUDIT_LOG_WEBHOOK, embeds=[embed])
+            await webhook.post()
 
         if self.is_online:
             # log the user out if they're offline, this
@@ -565,6 +574,16 @@ class Player:
         if self.match:
             self.leave_match()
 
+        if app.settings.DISCORD_AUDIT_LOG_WEBHOOK:
+            embed = Embed(title="Silence", timestamp=datetime.utcnow(), color=14964310)
+            embed.add_field("Silenced Player", f"[{self.name}]({self.url})", True)
+            embed.add_field("Reason", reason, True)
+            embed.add_field("Duration", timeago.format(self.silence_end).removeprefix("in "), True)
+            embed.set_footer(text="Moderation Tools")
+            embed.set_author(name=admin.name, icon_url=admin.avatar_url, url=admin.url)
+            webhook = Webhook(app.settings.DISCORD_AUDIT_LOG_WEBHOOK, embeds=[embed])
+            await webhook.post()
+
         log(f"Silenced {self}.", Ansi.LCYAN)
 
     async def unsilence(self, admin: Player, reason: str) -> None:
@@ -585,6 +604,15 @@ class Player:
 
         # inform the user's client
         self.enqueue(app.packets.silence_end(0))
+
+        if app.settings.DISCORD_AUDIT_LOG_WEBHOOK:
+            embed = Embed(title="Unsilence", timestamp=datetime.utcnow(), color=5694569)
+            embed.add_field("Unsilenced Player", f"[{self.name}]({self.url})", True)
+            embed.add_field("Reason", reason, True)
+            embed.set_footer(text="Moderation Tools")
+            embed.set_author(name=admin.name, icon_url=admin.avatar_url, url=admin.url)
+            webhook = Webhook(app.settings.DISCORD_AUDIT_LOG_WEBHOOK, embeds=[embed])
+            await webhook.post()
 
         log(f"Unsilenced {self}.", Ansi.LCYAN)
 
