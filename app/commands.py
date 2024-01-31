@@ -703,7 +703,7 @@ async def _map(ctx: Context) -> str | None:
         )
 
     if webhook_url := app.settings.DISCORD_NOMINATION_WEBHOOK:
-        name = f"{bmap.artist} - {bmap.title}{f' [{bmap.version}]' if ctx.args[1] == 'map' else ''}"
+        name = f"{bmap.artist} - {bmap.title}{f' [{bmap.version}]' if ctx.args[1] == 'map' else ''} ({bmap.creator})"
         color = 52478 if new_status == RankedStatus.Ranked else 16738218 if new_status == RankedStatus.Loved else 0
         embed = Embed(title="", description=f"[{name}]({bmap.url}) is now {'ranked' if new_status == RankedStatus.Ranked else 'loved' if new_status == RankedStatus.Loved else 'unranked'}!", timestamp=datetime.utcnow(), color=color)
         embed.set_author(name=ctx.player.name, icon_url=ctx.player.avatar_url, url=ctx.player.url)
