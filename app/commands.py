@@ -259,7 +259,7 @@ async def reconnect(ctx: Context) -> str | None:
 
     target.logout()
 
-    return None
+    return f"Reconnected {target}."
 
 
 @command(Privileges.SUPPORTER)
