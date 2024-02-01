@@ -189,6 +189,21 @@ async def _help(ctx: Context) -> str | None:
 
 
 @command(Privileges.UNRESTRICTED)
+async def support(ctx: Context) -> str | None:
+    """Generates a one-time use support code for staff members to identify the user."""
+    code = str(uuid.uuid4()).replace("-", "")[0:8]
+
+    # add code to database
+    await app.state.services.database.execute(
+        "INSERT INTO support_codes "
+        "VALUES(:user_id, :code)",
+        {"user_id": ctx.player.id, "code": code}
+    )
+
+    return f"Your one-time support code for authentication has been created and can be copied (here)[http://{code}]."
+
+
+@command(Privileges.UNRESTRICTED)
 async def roll(ctx: Context) -> str | None:
     """Roll an n-sided die where n is the number you write (100 default)."""
     if ctx.args and ctx.args[0].isdecimal():
@@ -481,31 +496,6 @@ async def _with(ctx: Context) -> str | None:
         pp=result[0]["performance"]["pp"],
         stars=result[0]["difficulty"]["stars"],
     )  # (first score result)
-
-
-@command(Privileges.DEVELOPER)
-async def resetpw(ctx: Context) -> str | None:
-    """Resets the password of a user by generating a new one and sending it via e-mail."""
-    if len(ctx.args) != 1:
-        return "Invalid syntax: !resetpw <name>"
-
-    target = await app.state.sessions.players.from_cache_or_sql(name=ctx.args[0])
-    if not target:
-        return f'"{ctx.args[0]}" not found.'
-
-    # generate a new random password
-    new_pw = str(uuid.uuid4()).replace("-", "")[0:12]
-    pw_md5 = hashlib.md5(new_pw.encode()).hexdigest().encode()
-    pw_bcrypt = bcrypt.hashpw(pw_md5, bcrypt.gensalt())
-
-    # update the password of the user in the database
-    await players_repo.update(target.id, pw_bcrypt=pw_bcrypt)
-
-    # log the user out, just in case
-    if target.is_online:
-        target.logout()
-    
-    return f"The password has been reset and can be copied (here)[http://{new_pw}]."
     
 
 @command(Privileges.UNRESTRICTED, aliases=["req"])
@@ -716,6 +706,30 @@ ACTION_STRINGS = {
 }
 
 
+@command(Privileges.MODERATOR, aliases=["rsc"], hidden=True)
+async def redeemsupportcode(ctx: Context) -> str | None:
+    """Redeems the specified support code, authenticating the user."""
+    if len(ctx.args) != 1:
+        return "Invalid syntax: !redeemsupportcode <code>"
+
+    # get the corresponding user's id
+    if not (rec := await app.state.services.database.fetch_one(
+        "SELECT user_id FROM support_codes WHERE code = :code",
+        {"code": ctx.args[0]},
+    )):
+        return "The entered support code does not exist."
+
+    # delete the support code to guarantee one-time use
+    await app.state.services.database.execute(
+        "DELETE FROM support_codes WHERE code = :code",
+        {"code": ctx.args[0]}
+    )
+
+    # get the corresponding user
+    target = await app.state.sessions.players.from_cache_or_sql(id=rec["user_id"])
+    return f"Successfully authenticated user <{target.embed} ({target.id})>."
+
+
 @command(Privileges.MODERATOR, hidden=True)
 async def notes(ctx: Context) -> str | None:
     """Retrieve the logs of a specified player by name."""
@@ -843,6 +857,31 @@ async def unsilence(ctx: Context) -> str | None:
 # The commands below are relatively dangerous,
 # and are generally for managing players.
 """
+
+
+@command(Privileges.DEVELOPER)
+async def resetpw(ctx: Context) -> str | None:
+    """Resets the password of a user by generating a new one and sending it via e-mail."""
+    if len(ctx.args) != 1:
+        return "Invalid syntax: !resetpw <name>"
+
+    target = await app.state.sessions.players.from_cache_or_sql(name=ctx.args[0])
+    if not target:
+        return f'"{ctx.args[0]}" not found.'
+
+    # generate a new random password
+    new_pw = str(uuid.uuid4()).replace("-", "")[0:12]
+    pw_md5 = hashlib.md5(new_pw.encode()).hexdigest().encode()
+    pw_bcrypt = bcrypt.hashpw(pw_md5, bcrypt.gensalt())
+
+    # update the password of the user in the database
+    await players_repo.update(target.id, pw_bcrypt=pw_bcrypt)
+
+    # log the user out, just in case
+    if target.is_online:
+        target.logout()
+    
+    return f"The password has been reset and can be copied (here)[http://{new_pw}]."
 
 
 @command(Privileges.ADMINISTRATOR, aliases=["u"], hidden=True)

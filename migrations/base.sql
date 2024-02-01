@@ -27,6 +27,11 @@ create table channels
 		unique (name)
 );
 
+create table support_codes (
+	user_id int not null primary key,
+	code varchar(8) not null
+);
+
 create table clans
 (
 	id int auto_increment
