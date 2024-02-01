@@ -8,6 +8,8 @@ import secrets
 import signal
 import time
 import traceback
+import hashlib
+import bcrypt
 import uuid
 from collections.abc import Awaitable
 from collections.abc import Callable
@@ -527,6 +529,31 @@ async def _with(ctx: Context) -> str | None:
         stars=result[0]["difficulty"]["stars"],  # (first score result)
     )
 
+
+@command(Privileges.DEVELOPER)
+async def resetpw(ctx: Context) -> str | None:
+    """Resets the password of a user by generating a new one and sending it via e-mail."""
+    if len(ctx.args) != 1:
+        return "Invalid syntax: !resetpw <name>"
+
+    target = await app.state.sessions.players.from_cache_or_sql(name=ctx.args[0])
+    if not target:
+        return f'"{ctx.args[0]}" not found.'
+
+    # generate a new random password
+    new_pw = str(uuid.uuid4()).replace("-", "")[0:12]
+    pw_md5 = hashlib.md5(new_pw.encode()).hexdigest().encode()
+    pw_bcrypt = bcrypt.hashpw(pw_md5, bcrypt.gensalt())
+
+    # update the password of the user in the database
+    await players_repo.update(target.id, pw_bcrypt=pw_bcrypt)
+
+    # log the user out, just in case
+    if target.is_online:
+        target.logout()
+    
+    return f"The password has been reset and can be copied (here)[http://{new_pw}]."
+    
 
 @command(Privileges.UNRESTRICTED, aliases=["req"])
 async def request(ctx: Context) -> str | None:

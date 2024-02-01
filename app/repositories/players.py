@@ -223,6 +223,7 @@ async def update(
     name: str | _UnsetSentinel = UNSET,
     email: str | _UnsetSentinel = UNSET,
     priv: int | _UnsetSentinel = UNSET,
+    pw_bcrypt: str | _UnsetSentinel = UNSET,
     country: str | _UnsetSentinel = UNSET,
     silence_end: int | _UnsetSentinel = UNSET,
     donor_end: int | _UnsetSentinel = UNSET,
@@ -246,6 +247,8 @@ async def update(
         update_fields["email"] = email
     if not isinstance(priv, _UnsetSentinel):
         update_fields["priv"] = priv
+    if not isinstance(pw_bcrypt, _UnsetSentinel):
+        update_fields["pw_bcrypt"] = pw_bcrypt
     if not isinstance(country, _UnsetSentinel):
         update_fields["country"] = country
     if not isinstance(silence_end, _UnsetSentinel):
