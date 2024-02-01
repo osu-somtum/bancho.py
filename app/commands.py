@@ -572,6 +572,13 @@ async def request(ctx: Context) -> str | None:
     if bmap.status != RankedStatus.Pending and bmap.status != RankedStatus.Loved:
         return "Only loved/pending/graveyarded maps may be requested for status change."
 
+    requests = await app.state.services.database.fetch_all(
+        "SELECT 1 FROM map_requests WHERE player_id = :player_id AND active = 1",
+        {"player_id": ctx.player.id}
+    )
+    if len(requests) >= 5:
+        return "You may only have 5 pending map requests at once."
+
     for b in bmap.set.maps:
         if await app.state.services.database.fetch_one(
             "SELECT 1 FROM map_requests WHERE map_id = :map_id AND active = 1",
