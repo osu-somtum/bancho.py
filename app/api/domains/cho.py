@@ -783,7 +783,7 @@ async def login(
             ),
         }
 
-    if db_country == "xx":
+    if True:
         # bugfix for old bancho.py versions when
         # country wasn't stored on registration.
         log(f"Fixing {login_data['username']}'s country.", Ansi.LGREEN)
