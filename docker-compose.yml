@@ -17,6 +17,7 @@ services:
     volumes:
       - ./migrations/base.sql:/docker-entrypoint-initdb.d/init.sql:ro
       - db-data:/var/lib/mysql
+      - ./my.cnf:/etc/mysql/conf.d/custom.cnf
     healthcheck:
       test: "/usr/bin/mysql --user=$$MYSQL_USER --password=$$MYSQL_PASSWORD --execute \"SHOW DATABASES;\""
       interval: 2s
