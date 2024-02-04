@@ -191,6 +191,9 @@ async def _help(ctx: Context) -> str | None:
 @command(Privileges.UNRESTRICTED)
 async def support(ctx: Context) -> str | None:
     """Generates a one-time use support code for staff members to identify the user."""
+    if ctx.recipient is not app.state.sessions.bot:
+        return f"Command only available in DMs with {app.state.sessions.bot.name}."
+    
     code = str(uuid.uuid4()).replace("-", "")[0:8]
 
     # add code to database
@@ -798,13 +801,6 @@ async def addnote(ctx: Context) -> str | None:
     return f"Added note to {target}."
 
 
-# some shorthands that can be used as
-# reasons in many moderative commands.
-SHORTHAND_REASONS = {
-    "aa": "having their appeal accepted",
-}
-
-
 @command(Privileges.MODERATOR, hidden=True)
 async def silence(ctx: Context) -> str | None:
     """Silence a specified player with a specified duration & reason."""
@@ -823,9 +819,6 @@ async def silence(ctx: Context) -> str | None:
         return "Invalid timespan."
 
     reason = " ".join(ctx.args[2:])
-
-    if reason in SHORTHAND_REASONS:
-        reason = SHORTHAND_REASONS[reason]
 
     await target.silence(ctx.player, duration, reason)
     return f"{target} was silenced."
@@ -880,6 +873,13 @@ async def resetpw(ctx: Context) -> str | None:
     # log the user out, just in case
     if target.is_online:
         target.logout()
+        
+    await app.state.services.database.execute(
+        "INSERT INTO logs "
+        "(`from`, `to`, `action`, `msg`, `time`) "
+        "VALUES (:from, :to, :action, :msg, NOW())",
+        {"from": ctx.player.id, "to": target.id, "action": "pw_reset", "msg": new_pw},
+    )
     
     return f"The password has been reset and can be copied (here)[http://{new_pw}]."
 
@@ -940,6 +940,22 @@ async def user(ctx: Context) -> str | None:
     )
 
 
+RESTRICT_ALIASES = {
+    "liveplay": "background check / liveplay requested",
+    "blatant": "blatant cheating",
+    "timewarp": "timewarp",
+    "aim": "aimbot / aim assist",
+    "bot": "replay editing / botting",
+    "changer": "beatmap stats modifications",
+    "relax": "relax cheating",
+    "multi": "multi-accounting"
+}
+
+UNRESTRICT_ALIASES = {
+    "liveplay": "background check / liveplay accepted",
+    "appeal": "restriction appealed successfully"
+}
+
 @command(Privileges.MODERATOR, hidden=True)
 async def restrict(ctx: Context) -> str | None:
     """Restrict a specified player's account, with a reason."""
@@ -958,9 +974,13 @@ async def restrict(ctx: Context) -> str | None:
         return f"{target} is already restricted!"
 
     reason = " ".join(ctx.args[1:])
-
-    if reason in SHORTHAND_REASONS:
-        reason = SHORTHAND_REASONS[reason]
+    if reason.startswith("*"): # custom reason
+        reason = reason[1:]
+    else: # template
+        if not reason in RESTRICT_ALIASES:
+            reasons = "\n".join([f"{key}: {value}" for key, value in RESTRICT_ALIASES.items()])
+            return f"Invalid restriction reason alias.\n\nAvailable aliases:\n{reasons}"
+        reason = RESTRICT_ALIASES[reason]
 
     await target.restrict(admin=ctx.player, reason=reason)
 
@@ -990,8 +1010,14 @@ async def unrestrict(ctx: Context) -> str | None:
 
     reason = " ".join(ctx.args[1:])
 
-    if reason in SHORTHAND_REASONS:
-        reason = SHORTHAND_REASONS[reason]
+    reason = " ".join(ctx.args[1:])
+    if reason.startswith("*"): # custom reason
+        reason = reason[1:]
+    else: # template
+        if not reason in UNRESTRICT_ALIASES:
+            reasons = "\n".join([f"{key}: {value}" for key, value in UNRESTRICT_ALIASES.items()])
+            return f"Invalid unrestriction reason alias.\n\nAvailable aliases:\n{reasons}"
+        reason = UNRESTRICT_ALIASES[reason]
 
     await target.unrestrict(ctx.player, reason)
 
