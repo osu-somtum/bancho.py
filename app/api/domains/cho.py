@@ -716,12 +716,17 @@ async def login(
         hw_checks = "h.uninstall_id = :uninstall"
         hw_args = {"uninstall": login_data["uninstall_md5"]}
     else:
-        hw_checks = "h.adapters = :adapters OR h.uninstall_id = :uninstall OR h.disk_serial = :disk_serial"
+        hw_checks = "h.adapters = :adapters OR h.uninstall_id = :uninstall"
         hw_args = {
             "adapters": login_data["adapters_md5"],
             "uninstall": login_data["uninstall_md5"],
             "disk_serial": login_data["disk_signature_md5"],
         }
+
+        # hotfix: some disk manufacturers have "0" for their disk serial, resulting in clashing md5 hashes of the string "0".
+        #         these need to be ignored since otherwise people will be prevented for getting logged in a lot.
+        if login_data["disk_signature_md5"] != "dcfcd07e645d245babe887e5e2daa016":
+            hw_checks += " OR h.disk_serial = :disk_serial"
 
     hw_matches = await db_conn.fetch_all(
         "SELECT u.name, u.priv, h.occurrences "
