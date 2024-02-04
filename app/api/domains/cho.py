@@ -443,16 +443,12 @@ class StatsUpdateRequest(BasePacket):
 
 # Some messages to send on welcome/restricted/etc.
 # TODO: these should probably be moved to the config.
-WELCOME_MSG = "\n".join(
-    (
-        f"Successfully verified. Welcome to {BASE_DOMAIN}!",
-    ),
-)
+WELCOME_MSG = f"Successfully verified. Welcome to {BASE_DOMAIN}!"
 
 RESTRICTED_MSG = (
-    "Your account is currently in restricted mode. "
+    "Your account is currently in restricted mode. Reason: $REASON. "
     "If you believe this is a mistake, or have waited a period "
-    "greater than 3 months, you may appeal via our [Discord](https://discord.gg/sst3ws-kingdom-972645182178738229)."
+    "greater than 3 months, you may appeal via our [Discord](https://{app.state.settings.DOMAIN}/discord)."
 )
 
 OFFLINE_NOTIFICATION = app.packets.notification(
@@ -973,7 +969,7 @@ async def login(
         data += app.packets.account_restricted()
         data += app.packets.send_message(
             sender=app.state.sessions.bot.name,
-            msg=RESTRICTED_MSG,
+            msg=RESTRICTED_MSG.replace("$REASON", await p.get_restriction_reason()),
             recipient=player.name,
             sender_id=app.state.sessions.bot.id,
         )

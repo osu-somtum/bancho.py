@@ -990,6 +990,17 @@ class Player:
         )
 
         return cast(int, rank) + 1 if rank is not None else 0
+    
+    async def get_restriction_reason(self) -> str:
+        if not self.restricted:
+            return ""
+        
+        row = await app.state.services.database.fetch_one(
+            "SELECT msg FROM logs WHERE to = :user_id AND action = 'restrict' ORDER BY time DESC LIMIT 1",
+            {"user_id": self.id}
+        )
+        
+        return row["msg"]
 
     async def update_rank(self, mode: GameMode) -> int:
         country = self.geoloc["country"]["acronym"]
