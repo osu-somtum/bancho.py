@@ -446,9 +446,9 @@ class StatsUpdateRequest(BasePacket):
 WELCOME_MSG = f"Successfully verified. Welcome to {BASE_DOMAIN}!"
 
 RESTRICTED_MSG = (
-    "Your account is currently in restricted mode. Reason: $REASON. "
+    "Your account is currently in restricted mode. Reason: $REASON.\n"
     "If you believe this is a mistake, or have waited a period "
-    "greater than 3 months, you may appeal by creating a support-ticket on our [Discord](https://{app.settings.DOMAIN}/discord)."
+    f"greater than 3 months, you may appeal by creating a support-ticket on our (Discord)[https://{app.settings.DOMAIN}/discord]."
 )
 
 OFFLINE_NOTIFICATION = app.packets.notification(

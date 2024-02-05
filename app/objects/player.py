@@ -996,7 +996,7 @@ class Player:
             return ""
         
         row = await app.state.services.database.fetch_one(
-            "SELECT msg FROM logs WHERE to = :user_id AND action = 'restrict' ORDER BY time DESC LIMIT 1",
+            "SELECT `msg` FROM `logs` WHERE `to` = :user_id AND `action` = 'restrict' ORDER BY `time` DESC LIMIT 1",
             {"user_id": self.id}
         )
         
