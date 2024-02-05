@@ -116,7 +116,7 @@ create table mail
 		primary key,
 	from_id int not null,
 	to_id int not null,
-	msg varchar(2048) charset utf8 not null,
+	msg varchar(2048) collate utf8_general_ci not null,
 	time int null,
 	`read` tinyint(1) default 0 not null
 );
