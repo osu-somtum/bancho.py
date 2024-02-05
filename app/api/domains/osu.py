@@ -828,26 +828,25 @@ async def osuSubmitModularSelector(
 
         score.time_elapsed = score_time if score.passed else fail_time
 
-        if (  # check for pp caps on ranked & approved maps for appropriate players.
-            score.bmap.awards_ranked_pp
-            and not (
-                score.player.priv & Privileges.WHITELISTED or score.player.restricted
-            )
-        ):
-            # Get the PP cap for the current context.
-            """# TODO: find where to put autoban pp
-            pp_cap = app.settings.AUTOBAN_PP[score.mode][score.mods & Mods.FLASHLIGHT != 0]
+        score_eligible = score.bmap.awards_ranked_pp and score.passed
+        player_eligible = not score.player.priv & Privileges.WHITELISTED and not score.player.restricted
+        if score_eligible and player_eligible:
+            caps = {
+                0: 800,  #vn!std
+                4: 1300, #rx!std
+                8: 600   #ap!std
+            }
 
-            if score.pp > pp_cap:
+            # check if pp cap was exceeded
+            if score.mode in caps and score.pp >= caps[score.mode]:
                 await score.player.restrict(
                     admin=app.state.sessions.bot,
-                    reason=f"[{score.mode!r} {score.mods!r}] autoban @ {score.pp:.2f}pp",
+                    reason=f"[{score.mode!r} autoban] liveplay requested for reaching the PP limit",
                 )
 
                 # refresh their client state
                 if score.player.online:
                     score.player.logout()
-            """
 
         """ Score submission checks completed; submit the score. """
 
