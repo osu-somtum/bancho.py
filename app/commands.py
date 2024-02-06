@@ -951,11 +951,6 @@ RESTRICT_ALIASES = {
     "multi": "multi-accounting"
 }
 
-UNRESTRICT_ALIASES = {
-    "liveplay": "background check / liveplay accepted",
-    "appeal": "restriction appealed successfully"
-}
-
 @command(Privileges.MODERATOR, hidden=True)
 async def restrict(ctx: Context) -> str | None:
     """Restrict a specified player's account, with a reason."""
@@ -1009,15 +1004,6 @@ async def unrestrict(ctx: Context) -> str | None:
         return f"{target} is not restricted!"
 
     reason = " ".join(ctx.args[1:])
-
-    reason = " ".join(ctx.args[1:])
-    if reason.startswith("*"): # custom reason
-        reason = reason[1:]
-    else: # template
-        if not reason in UNRESTRICT_ALIASES:
-            reasons = "\n".join([f"{key}: {value}" for key, value in UNRESTRICT_ALIASES.items()])
-            return f"Invalid unrestriction reason alias.\n\nAvailable aliases:\n{reasons}"
-        reason = UNRESTRICT_ALIASES[reason]
 
     await target.unrestrict(ctx.player, reason)
 

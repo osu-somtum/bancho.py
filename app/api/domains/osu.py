@@ -833,7 +833,7 @@ async def osuSubmitModularSelector(
         if score_eligible and player_eligible:
             caps = {
                 0: 800,  #vn!std
-                4: 1300, #rx!std
+                4: 1400, #rx!std
                 8: 600   #ap!std
             }
 
