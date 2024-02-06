@@ -841,7 +841,7 @@ async def osuSubmitModularSelector(
             if score.mode in caps and score.pp >= caps[score.mode]:
                 await score.player.restrict(
                     admin=app.state.sessions.bot,
-                    reason=f"[{score.mode!r} autoban] liveplay requested for reaching the PP limit",
+                    reason=f"[{score.mode!r} autoban] background check / liveplay requested",
                 )
 
                 # refresh their client state
