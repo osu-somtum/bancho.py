@@ -940,6 +940,82 @@ async def user(ctx: Context) -> str | None:
     )
 
 
+@command(Privileges.MODERATOR, hidden=True)
+async def whitelist(ctx: Context) -> str | None:
+    """Adds the verified (whitelisted) role to the specified user, making them invulnerable to first-stage anticheat checks."""
+    if len(ctx.args) < 1:
+        return "Invalid syntax: !whitelist <name>"
+
+    name = " ".join(ctx.args)
+    target = await app.state.sessions.players.from_cache_or_sql(name=name)
+    if not target:
+        return f'"{name}" not found.'
+
+    if target.priv & Privileges.WHITELISTED:
+        return "The user is already whitelisted."
+
+    await app.state.services.database.execute(
+        "INSERT INTO logs "
+        "(`from`, `to`, `action`, `msg`, `time`) "
+        "VALUES (:from, :to, :action, :msg, NOW())",
+        {
+            "from": ctx.player.id,
+            "to": target.id,
+            "action": "whitelist",
+            "msg": "",
+        },
+    )
+
+    if app.settings.DISCORD_AUDIT_LOG_WEBHOOK:
+        embed = Embed(title="Whitelist", timestamp=datetime.utcnow(), color=16777215)
+        embed.add_field("Targetted User", f"[{target.name}]({target.url})", True)
+        embed.set_footer(text="Moderation Tools")
+        embed.set_author(name=ctx.player.name, icon_url=ctx.player.avatar_url, url=ctx.player.url)
+        webhook = Webhook(app.settings.DISCORD_AUDIT_LOG_WEBHOOK, embeds=[embed])
+        await webhook.post()
+
+    await target.add_privs(Privileges.WHITELISTED)
+    return f"{target.embed} was successfully whitelisted."
+
+
+@command(Privileges.MODERATOR, hidden=True)
+async def unwhitelist(ctx: Context) -> str | None:
+    """Removes the verified (whitelisted) role from the specified user, making them invulnerable to first-stage anticheat checks."""
+    if len(ctx.args) < 1:
+        return "Invalid syntax: !unwhitelist <name>"
+
+    name = " ".join(ctx.args)
+    target = await app.state.sessions.players.from_cache_or_sql(name=name)
+    if not target:
+        return f'"{name}" not found.'
+
+    if not target.priv & Privileges.WHITELISTED:
+        return "The user is not whitelisted."
+
+    await app.state.services.database.execute(
+        "INSERT INTO logs "
+        "(`from`, `to`, `action`, `msg`, `time`) "
+        "VALUES (:from, :to, :action, :msg, NOW())",
+        {
+            "from": ctx.player.id,
+            "to": target.id,
+            "action": "unwhitelist",
+            "msg": "",
+        },
+    )
+
+    if app.settings.DISCORD_AUDIT_LOG_WEBHOOK:
+        embed = Embed(title="Unwhitelist", timestamp=datetime.utcnow(), color=0)
+        embed.add_field("Targetted User", f"[{target.name}]({target.url})", True)
+        embed.set_footer(text="Moderation Tools")
+        embed.set_author(name=ctx.player.name, icon_url=ctx.player.avatar_url, url=ctx.player.url)
+        webhook = Webhook(app.settings.DISCORD_AUDIT_LOG_WEBHOOK, embeds=[embed])
+        await webhook.post()
+
+    await target.remove_privs(Privileges.WHITELISTED)
+    return f"{target.embed} was successfully un-whitelisted."
+
+
 RESTRICT_ALIASES = {
     "liveplay": "background check / liveplay requested",
     "blatant": "blatant cheating",
