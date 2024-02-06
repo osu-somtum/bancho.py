@@ -447,7 +447,7 @@ WELCOME_MSG = f"Successfully verified. Welcome to {BASE_DOMAIN}!"
 
 RESTRICTED_MSG = (
     "Your account is currently in restricted mode. Reason: $REASON.\n"
-    "If you believe this is a mistake, or have waited a period "
+    "If you believe this is a mistake, the reason is of minor severity, or have waited a period "
     f"greater than 3 months, you may appeal by creating a support-ticket on our (Discord)[https://{app.settings.DOMAIN}/discord]."
 )
 
