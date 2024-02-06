@@ -197,6 +197,7 @@ async def api_calculate_pp(
 @router.get("/search_players")
 async def api_search_players(
     search: str | None = Query(None, alias="q", min=2, max=32),
+    limit: int | None = Query(10, alias="l", min=1, max=100)
 ) -> Response:
     """Search for users on the server by name."""
     rows = await app.state.services.database.fetch_all(
@@ -204,8 +205,9 @@ async def api_search_players(
         "FROM users "
         "WHERE name LIKE COALESCE(:name, name) "
         "AND priv & 3 = 3 "
-        "ORDER BY id ASC",
-        {"name": f"%{search}%" if search is not None else None},
+        "ORDER BY id ASC "
+        "LIMIT :limit",
+        {"name": f"%{search}%" if search is not None else None, "limit": limit},
     )
 
     return ORJSONResponse(
