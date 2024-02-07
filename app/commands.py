@@ -706,6 +706,9 @@ ACTION_STRINGS = {
     "silence": "Silenced for",
     "unsilence": "Unsilenced for",
     "note": "Note added:",
+    "pw_reset": "Password reset to",
+    "whitelist": "Whitelisted",
+    "unwhitelist": "Unwhitelisted"
 }
 
 
