@@ -713,6 +713,10 @@ async def osuSubmitModularSelector(
     # parse the score from the remaining data
     score = Score.from_submission(score_data[2:])
 
+    if score.mods & Mods.SCOREV2:
+        log(f"{username} tried to submit a ScoreV2 score.", Ansi.LYELLOW)
+        return b"error: no"
+
     # attach bmap & player
     score.bmap = bmap
     score.player = player
