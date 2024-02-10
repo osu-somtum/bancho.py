@@ -516,9 +516,8 @@ class Player:
             {"from": admin.id, "to": self.id, "action": "unrestrict", "msg": reason},
         )
 
-        if not self.is_online:
-            async with app.state.services.database.connection() as db_conn:
-                await self.stats_from_sql_full(db_conn)
+        async with app.state.services.database.connection() as db_conn:
+            await self.stats_from_sql_full(db_conn)
 
         for mode, stats in self.stats.items():
             await app.state.services.redis.zadd(
