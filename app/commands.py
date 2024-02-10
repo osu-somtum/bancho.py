@@ -265,7 +265,7 @@ async def reconnect(ctx: Context) -> str | None:
     """Disconnect and reconnect a given player (or self) to the server."""
     if ctx.args:
         # !reconnect <player>
-        if not ctx.player.priv & Privileges.ADMINISTRATOR:
+        if not ctx.player.priv & Privileges.DEVELOPER:
             return None  # requires admin
 
         target = app.state.sessions.players.get(name=" ".join(ctx.args))
@@ -849,100 +849,6 @@ async def unsilence(ctx: Context) -> str | None:
     return f"{target} was unsilenced."
 
 
-""" Admin commands
-# The commands below are relatively dangerous,
-# and are generally for managing players.
-"""
-
-
-@command(Privileges.DEVELOPER)
-async def resetpw(ctx: Context) -> str | None:
-    """Resets the password of a user by generating a new one and sending it via e-mail."""
-    if len(ctx.args) != 1:
-        return "Invalid syntax: !resetpw <name>"
-
-    target = await app.state.sessions.players.from_cache_or_sql(name=ctx.args[0])
-    if not target:
-        return f'"{ctx.args[0]}" not found.'
-
-    # generate a new random password
-    new_pw = str(uuid.uuid4()).replace("-", "")[0:12]
-    pw_md5 = hashlib.md5(new_pw.encode()).hexdigest().encode()
-    pw_bcrypt = bcrypt.hashpw(pw_md5, bcrypt.gensalt())
-
-    # update the password of the user in the database
-    await players_repo.update(target.id, pw_bcrypt=pw_bcrypt)
-
-    # log the user out, just in case
-    if target.is_online:
-        target.logout()
-        
-    await app.state.services.database.execute(
-        "INSERT INTO logs "
-        "(`from`, `to`, `action`, `msg`, `time`) "
-        "VALUES (:from, :to, :action, :msg, NOW())",
-        {"from": ctx.player.id, "to": target.id, "action": "pw_reset", "msg": new_pw},
-    )
-    
-    return f"The password has been reset and can be copied (here)[http://{new_pw}]."
-
-
-@command(Privileges.ADMINISTRATOR, aliases=["u"], hidden=True)
-async def user(ctx: Context) -> str | None:
-    """Return general information about a given user."""
-    if not ctx.args:
-        # no username specified, use ctx.player
-        player = ctx.player
-    else:
-        # username given, fetch the player
-        maybe_player = await app.state.sessions.players.from_cache_or_sql(
-            name=" ".join(ctx.args),
-        )
-
-        if maybe_player is None:
-            return "Player not found."
-
-        player = maybe_player
-
-    priv_list = [
-        priv.name
-        for priv in Privileges
-        if player.priv & priv and bin(priv).count("1") == 1
-    ][::-1]
-    if player.last_np is not None and time.time() < player.last_np["timeout"]:
-        last_np = player.last_np["bmap"].embed
-    else:
-        last_np = None
-
-    if player.is_online and player.client_details is not None:
-        osu_version = player.client_details.osu_version.date.isoformat()
-    else:
-        osu_version = "Unknown"
-
-    donator_info = (
-        f"True (ends {timeago.format(player.donor_end)})"
-        if player.priv & Privileges.DONATOR != 0
-        else "False"
-    )
-
-    return "\n".join(
-        (
-            f'[{"Bot" if player.bot_client else "Player"}] {player.full_name} ({player.id})',
-            f"Privileges: {priv_list}",
-            f"Donator: {donator_info}",
-            f"Channels: {[c._name for c in player.channels]}",
-            f"Logged in: {timeago.format(player.login_time)}",
-            f"Last server interaction: {timeago.format(player.last_recv_time)}",
-            f"osu! build: {osu_version} | Tourney: {player.tourney_client}",
-            f"Silenced: {player.silenced} | Spectating: {player.spectating}",
-            f"Last /np: {last_np}",
-            f"Recent score: {player.recent_score}",
-            f"Match: {player.match}",
-            f"Spectators: {player.spectators}",
-        ),
-    )
-
-
 @command(Privileges.MODERATOR, hidden=True)
 async def whitelist(ctx: Context) -> str | None:
     """Adds the verified (whitelisted) role to the specified user, making them invulnerable to first-stage anticheat checks."""
@@ -1030,6 +936,7 @@ RESTRICT_ALIASES = {
     "multi": "multi-accounting"
 }
 
+
 @command(Privileges.MODERATOR, hidden=True)
 async def restrict(ctx: Context) -> str | None:
     """Restrict a specified player's account, with a reason."""
@@ -1093,7 +1000,19 @@ async def unrestrict(ctx: Context) -> str | None:
     return f"{target} was unrestricted."
 
 
-@command(Privileges.ADMINISTRATOR, hidden=True)
+""" Admin commands
+# The commands below are relatively dangerous,
+# and are generally for managing players.
+"""
+
+
+""" Developer commands
+# The commands below are either dangerous or
+# simply not useful for any other roles.
+"""
+
+
+@command(Privileges.DEVELOPER, hidden=True)
 async def alert(ctx: Context) -> str | None:
     """Send a notification to all players."""
     if len(ctx.args) < 1:
@@ -1105,11 +1024,11 @@ async def alert(ctx: Context) -> str | None:
     return "Alert sent."
 
 
-@command(Privileges.ADMINISTRATOR, aliases=["alertu"], hidden=True)
+@command(Privileges.DEVELOPER, aliases=["alertu"], hidden=True)
 async def alertuser(ctx: Context) -> str | None:
     """Send a notification to a specified player by name."""
     if len(ctx.args) < 2:
-        return "Invalid syntax: !alertu <name> <msg>"
+        return "Invalid syntax: !alertuser <name> <msg>"
 
     target = app.state.sessions.players.get(name=ctx.args[0])
     if not target:
@@ -1168,10 +1087,92 @@ async def shutdown(ctx: Context) -> str | None | NoReturn:
         return "Process killed"
 
 
-""" Developer commands
-# The commands below are either dangerous or
-# simply not useful for any other roles.
-"""
+@command(Privileges.DEVELOPER)
+async def resetpw(ctx: Context) -> str | None:
+    """Resets the password of a user by generating a new one and sending it via e-mail."""
+    if len(ctx.args) != 1:
+        return "Invalid syntax: !resetpw <name>"
+
+    target = await app.state.sessions.players.from_cache_or_sql(name=ctx.args[0])
+    if not target:
+        return f'"{ctx.args[0]}" not found.'
+
+    # generate a new random password
+    new_pw = str(uuid.uuid4()).replace("-", "")[0:12]
+    pw_md5 = hashlib.md5(new_pw.encode()).hexdigest().encode()
+    pw_bcrypt = bcrypt.hashpw(pw_md5, bcrypt.gensalt())
+
+    # update the password of the user in the database
+    await players_repo.update(target.id, pw_bcrypt=pw_bcrypt)
+
+    # log the user out, just in case
+    if target.is_online:
+        target.logout()
+        
+    await app.state.services.database.execute(
+        "INSERT INTO logs "
+        "(`from`, `to`, `action`, `msg`, `time`) "
+        "VALUES (:from, :to, :action, :msg, NOW())",
+        {"from": ctx.player.id, "to": target.id, "action": "pw_reset", "msg": new_pw},
+    )
+    
+    return f"The password has been reset and can be copied (here)[http://{new_pw}]."
+
+
+@command(Privileges.DEVELOPER, aliases=["u"], hidden=True)
+async def user(ctx: Context) -> str | None:
+    """Return general information about a given user."""
+    if not ctx.args:
+        # no username specified, use ctx.player
+        player = ctx.player
+    else:
+        # username given, fetch the player
+        maybe_player = await app.state.sessions.players.from_cache_or_sql(
+            name=" ".join(ctx.args),
+        )
+
+        if maybe_player is None:
+            return "Player not found."
+
+        player = maybe_player
+
+    priv_list = [
+        priv.name
+        for priv in Privileges
+        if player.priv & priv and bin(priv).count("1") == 1
+    ][::-1]
+    if player.last_np is not None and time.time() < player.last_np["timeout"]:
+        last_np = player.last_np["bmap"].embed
+    else:
+        last_np = None
+
+    if player.is_online and player.client_details is not None:
+        osu_version = player.client_details.osu_version.date.isoformat()
+    else:
+        osu_version = "Unknown"
+
+    donator_info = (
+        f"True (ends {timeago.format(player.donor_end)})"
+        if player.priv & Privileges.DONATOR != 0
+        else "False"
+    )
+
+    return "\n".join(
+        (
+            f'[{"Bot" if player.bot_client else "Player"}] {player.full_name} ({player.id})',
+            f"Privileges: {priv_list}",
+            f"Donator: {donator_info}",
+            f"Channels: {[c._name for c in player.channels]}",
+            f"Logged in: {timeago.format(player.login_time)}",
+            f"Last server interaction: {timeago.format(player.last_recv_time)}",
+            f"osu! build: {osu_version} | Tourney: {player.tourney_client}",
+            f"Silenced: {player.silenced} | Spectating: {player.spectating}",
+            f"Last /np: {last_np}",
+            f"Recent score: {player.recent_score}",
+            f"Match: {player.match}",
+            f"Spectators: {player.spectators}",
+        ),
+    )
 
 
 @command(Privileges.DEVELOPER)
@@ -1237,6 +1238,15 @@ async def addpriv(ctx: Context) -> str | None:
 
     if bits & Privileges.DONATOR != 0:
         return "Please use the !givedonator command to assign donator privileges to players."
+
+    if bits & Privileges.UNRESTRICTED:
+        return "Please use the !unrestrict command to unrestrict players."
+
+    if bits & Privileges.VERIFIED:
+        return "Players need to log-in for the first time in order to get verified."
+
+    if bits & Privileges.WHITELISTED:
+        return "Please use the !whitelist command to whitelist players."
 
     await target.add_privs(bits)
     return f"Updated {target}'s privileges."
@@ -1414,6 +1424,46 @@ async def server(ctx: Context) -> str | None:
             requirements_info,
         ),
     )
+
+
+@command(Privileges.DEVELOPER, aliases=["cc"])
+async def changecountry(ctx: Context) -> str | None:
+    """Changes the country of the specified user to the specified ISO-code."""
+    if len(ctx.args) != 2:
+        return "Invalid syntax: !cc <name> <iso_country_code>"
+
+    target = await app.state.sessions.players.from_cache_or_sql(name=ctx.args[0])
+    if not target:
+        return "User not found."
+
+    cc = ctx.args[1].lower()
+
+    if target.geoloc["country"]["acronym"] == cc:
+        return "User is already in the specified country."
+
+    if not cc in app.state.services.country_codes:
+        return "Country not found."
+
+    # update country code
+    await players_repo.update(target.id, country=cc)
+
+    # populate the player with the stats from SQL
+    async with app.state.services.database.connection() as db_conn:
+        await target.stats_from_sql_full(db_conn)
+
+    # remove pp from old country leaderboard and add to new one
+    for mode, stats in target.stats.items():
+        await app.state.services.redis.zrem(
+            f'bancho:leaderboard:{mode.value}:{target.geoloc["country"]["acronym"]}',
+            target.id,
+        )
+        await app.state.services.redis.zadd(
+            f'bancho:leaderboard:{mode.value}:{cc}',
+            {str(target.id): stats.pp}
+        )
+        print(f"UPDATED {mode} {target.geoloc['country']['acronym']} -> {cc} with PP {stats.pp}")
+
+    return f"Updated {target.embed}'s country to {cc.upper()}."
 
 
 if app.settings.DEVELOPER_MODE:
@@ -2011,7 +2061,7 @@ async def mp_rematch(ctx: Context, match: Match) -> str | None:
     return msg
 
 
-@mp_commands.add(Privileges.ADMINISTRATOR, aliases=["f"], hidden=True)
+@mp_commands.add(Privileges.DEVELOPER, aliases=["f"], hidden=True)
 @ensure_match
 async def mp_force(ctx: Context, match: Match) -> str | None:
     """Force a player into the current match by name."""
