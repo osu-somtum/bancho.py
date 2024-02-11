@@ -27,7 +27,7 @@ services:
   pma:
     image: phpmyadmin:latest
     environment:
-      PMA_HOST: localhost
+      PMA_HOST: mysql
       PMA_PORT: 3306
     ports:
       - 8081:80
