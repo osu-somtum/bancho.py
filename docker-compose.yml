@@ -24,6 +24,14 @@ services:
       timeout: 20s
       retries: 10
 
+  pma:
+    image: phpmyadmin:latest
+    environment:
+      PMA_HOST: localhost
+      PMA_PORT: 3306
+    ports:
+      - 8081:80
+
   redis:
     image: bitnami/redis:latest
     # ports:
