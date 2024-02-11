@@ -248,19 +248,24 @@ async def main(argv: Sequence[str] | None = None) -> int:
     if len(argv) == 0:
         argv = ["--help"]
 
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="Provides tools for recalculating the PP and status of scores, and stats of users."
+    )
 
     parser.add_argument("-d", "--debug", action="store_true")
     parser.add_argument(
         "--scores",
+        help="Recalculates the PP of all scores",
         action="store_true"
     )
     parser.add_argument(
         "--stats",
+        help="Recalculates the total PP and accuracy of all users",
         action="store_true"
     )
     parser.add_argument(
         "--statuses",
+        help="Re-evaluates the submission status (BEST, SUBMITTED) of scores",
         action="store_true"
     )
 
