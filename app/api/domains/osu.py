@@ -1748,14 +1748,14 @@ if app.settings.REDIRECT_OSU_URLS:
 
     async def osu_redirect_beatmaps(file_path: str) -> Response:
         return RedirectResponse(
-            url=f"https://osu.ppy.sh/b/{file_path}",
-            status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+            url=f"https://{app.settings.DOMAIN}/b/{file_path}",
+            status_code=status.HTTP_301_MOVED_PERMANENTLY,
         )
 
     async def osu_redirect_beatmapsets(file_path: str) -> Response:
         return RedirectResponse(
-            url=f"https://osu.ppy.sh/s/{file_path}",
-            status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+            url=f"https://{app.settings.DOMAIN}/s/{file_path}",
+            status_code=status.HTTP_301_MOVED_PERMANENTLY,
         )
 
     async def osu_redirect_topic(file_path: str) -> Response:
