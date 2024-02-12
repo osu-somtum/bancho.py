@@ -1090,6 +1090,9 @@ async def shutdown(ctx: Context) -> str | None | NoReturn:
 @command(Privileges.DEVELOPER)
 async def resetpw(ctx: Context) -> str | None:
     """Resets the password of a user by generating a new one and sending it via e-mail."""
+    if ctx.recipient is not app.state.sessions.bot:
+        return f"Command only available in DMs with {app.state.sessions.bot.name}."
+    
     if len(ctx.args) != 1:
         return "Invalid syntax: !resetpw <name>"
 
