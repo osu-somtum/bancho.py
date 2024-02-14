@@ -441,9 +441,6 @@ async def top(ctx: Context) -> str | None:
 @command(Privileges.UNRESTRICTED, aliases=["w"], hidden=True)
 async def _with(ctx: Context) -> str | None:
     """Specify custom accuracy & mod combinations with `/np`."""
-    if ctx.recipient is not app.state.sessions.bot:
-        return "This command can only be used in DM with bot."
-
     if ctx.player.last_np is None or time.time() >= ctx.player.last_np["timeout"]:
         return "Please /np a map first!"
 
