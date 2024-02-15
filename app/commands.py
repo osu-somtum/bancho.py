@@ -527,7 +527,7 @@ async def request(ctx: Context) -> str | None:
             "SELECT 1 FROM map_requests WHERE map_id = :map_id AND active = 1",
             {"map_id": b.id}
         ):
-            return "A map from this mapset has already been requested! Our BNs will always check the full mapset of requested maps."
+            return "This mapset has already been requested!"
 
     await app.state.services.database.execute(
         "INSERT INTO map_requests"
@@ -589,7 +589,7 @@ async def requests(ctx: Context) -> str | None:
             l.append(f"Failed to find requested map ({map_id})?")
             continue
 
-        l.append(f"#{id}: {bmap.embed}\n({dt:%b %d %I:%M%p}) Requested for {requested_status} by {p.embed}. {'No additional comment was specified.' if comment == '' else f'Comment: {comment}'}")
+        l.append(f"#{id}: [{bmap.set.url} {bmap.artist} - {bmap.title}]\n({dt:%b %d %I:%M%p}) Requested for {requested_status} by {p.embed}. {'No additional comment was specified.' if comment == '' else f'Comment: {comment}'}")
 
     return "\n".join(l)
 
@@ -689,7 +689,10 @@ async def _map(ctx: Context) -> str | None:
         webhook = Webhook(webhook_url, embeds=[embed])
         await webhook.post()
 
-    return f"{bmap.embed} updated to {new_status!s}."
+    if ctx.args[1] == "set":
+        return f"[{bmap.set.url} {bmap.artist} - {bmap.title}] updated to {new_status!s}."
+    else:
+        return f"{bmap.embed} updated to {new_status!s}."
 
 
 """ Mod commands
