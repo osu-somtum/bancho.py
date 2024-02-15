@@ -577,9 +577,9 @@ async def requests(ctx: Context) -> str | None:
     if not rows:
         return "The queue is clean! (0 map request(s))"
 
-    l = [f"Total requests: {len(rows)}"]
+    l = [f"Total requests: {len(rows)} {'(displaying the first 10)' if len(rows) > 10 else ''}"]
 
-    for id, map_id, requested_status, comment, player_id, dt in rows:
+    for id, map_id, requested_status, comment, player_id, dt in rows[:10]:
         # find player & map for each row, and add to output.
         if not (p := await app.state.sessions.players.from_cache_or_sql(id=player_id)):
             l.append(f"Failed to find requesting player ({player_id})?")
