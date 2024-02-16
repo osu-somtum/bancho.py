@@ -199,6 +199,8 @@ class Players(list[Player]):
                     return player
             elif name is not None:
                 if player.safe_name == make_safe_name(name):
+                    print("from cache")
+                    print(player)
                     return player
 
         return None
@@ -215,6 +217,8 @@ class Players(list[Player]):
             name=name,
             fetch_all_fields=True,
         )
+        print("from sql")
+        print(player)
         if player is None:
             return None
 
@@ -242,6 +246,7 @@ class Players(list[Player]):
             silence_end=player["silence_end"],
             donor_end=player["donor_end"],
             api_key=player["api_key"],
+            votes=player["votes"]
         )
 
     async def from_cache_or_sql(

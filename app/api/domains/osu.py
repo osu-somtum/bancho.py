@@ -1984,8 +1984,8 @@ async def voteCallback(username: str, key: str, request: Request) -> Response:
             status_code=status.HTTP_404_NOT_FOUND
         )
     
-    log(f"Vote received from user {target}!", Ansi.LCYAN)
-    target.send_bot(f"Thank you for voting! Current progress: {(target.votes % 5) + 1}/5 votes ({target.votes} total)")
+    log(f"Vote received from {target}!", Ansi.LCYAN)
+    target.send_bot(f"Thank you for voting! Current progress: {(target.votes % 5) + 1}/5 votes ({target.votes + 1} total)")
     
     # add the vote to the user
     target.votes += 1
@@ -1994,7 +1994,7 @@ async def voteCallback(username: str, key: str, request: Request) -> Response:
     # if 5 votes was reached, reward the user with supporter
     if target.votes % 5 == 0:
         log(f"{target} receives supporter status through voting 5 times.", Ansi.LMAGENTA)
-        target.send_bot(f"You received a free week of supporter status.")
+        target.send_bot(f"You received a free week of supporter status!")
         
         timespan = 5 * 24 * 60 * 60 + (int(time.time()) if target.donor_end < time.time() else target.donor_end)
         target.donor_end = timespan

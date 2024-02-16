@@ -191,10 +191,7 @@ async def _help(ctx: Context) -> str | None:
 @command(Privileges.UNRESTRICTED)
 async def vote(ctx: Context) -> str | None:
     """Displays the current vote progression of the player."""
-    return f"""
-            Every 5 votes you receive 7 days of supporter status. Current progress: {ctx.player.votes % 5}/5 votes ({ctx.player.votes} total)
-            Click (here)][https://osu-server-list.com/server/kokisu/vote] to vote!
-            """
+    return f"Every 5 votes you receive 7 days of supporter status. Current progress: {ctx.player.votes % 5}/5 votes ({ctx.player.votes} total)\nClick [https://osu-server-list.com/server/kokisu/vote here] to vote!"
 
 
 @command(Privileges.UNRESTRICTED)

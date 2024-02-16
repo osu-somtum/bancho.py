@@ -448,7 +448,7 @@ WELCOME_MSG = f"Successfully verified. Welcome to {BASE_DOMAIN}!"
 RESTRICTED_MSG = (
     "Your account is currently in restricted mode. Reason: $REASON.\n"
     "If you believe this is a mistake, the reason is of minor severity, or have waited a period "
-    f"greater than 3 months, you may appeal by creating a support-ticket on our (Discord)[https://{app.settings.DOMAIN}/discord]."
+    f"greater than 3 months, you may appeal by creating a support-ticket on our [https://{app.settings.DOMAIN}/discord Discord]."
 )
 
 OFFLINE_NOTIFICATION = app.packets.notification(
@@ -826,6 +826,7 @@ async def login(
         login_time=login_time,
         tourney_client=osu_version.stream == "tourney",
         api_key=user_info["api_key"],
+        votes=user_info["votes"]
     )
 
     data = bytearray(app.packets.protocol_version(19))
