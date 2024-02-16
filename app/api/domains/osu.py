@@ -5,6 +5,7 @@ import copy
 import hashlib
 import random
 import secrets
+import time
 from base64 import b64decode
 from collections import defaultdict
 from collections.abc import Awaitable
@@ -1964,3 +1965,44 @@ async def difficultyRatingHandler(request: Request) -> Response:
         url=f"https://osu.ppy.sh{request['path']}",
         status_code=status.HTTP_307_TEMPORARY_REDIRECT,
     )
+
+@router.post("/vote-callback")
+async def voteCallback(username: str, key: str, request: Request) -> Response:
+    # validate the key
+    if key != app.settings.OSU_SERVER_LIST_API_KEY:
+        log("Received vote-callback with invalid key.", Ansi.LRED)
+        return Response(
+            content=b"Invalid API key.",
+            status_code=status.HTTP_401_UNAUTHORIZED
+        )
+    
+    # find the user
+    if not (target := await app.state.sessions.players.from_cache_or_sql(name=username)):
+        log(f"Vote received from unknown user '{username}'", Ansi.LYELLOW)
+        return Response(
+            content=b"User not found.",
+            status_code=status.HTTP_404_NOT_FOUND
+        )
+    
+    log(f"Vote received from user {target}!", Ansi.LCYAN)
+    target.send_bot(f"Thank you for voting! Current progress: {(target.votes % 5) + 1}/5 votes ({target.votes} total)")
+    
+    # add the vote to the user
+    target.votes += 1
+    await players_repo.update(target.id, votes=target.votes)
+
+    # if 5 votes was reached, reward the user with supporter
+    if target.votes % 5 == 0:
+        log(f"{target} receives supporter status through voting 5 times.", Ansi.LMAGENTA)
+        target.send_bot(f"You received a free week of supporter status.")
+        
+        timespan = 5 * 24 * 60 * 60 + (int(time.time()) if target.donor_end < time.time() else target.donor_end)
+        target.donor_end = timespan
+        await app.state.services.database.execute(
+            "UPDATE users SET donor_end = :end WHERE id = :user_id",
+            {"end": timespan, "user_id": target.id},
+        )
+
+        await target.add_privs(Privileges.SUPPORTER)
+
+    return Response(status_code=status.HTTP_200_OK)
