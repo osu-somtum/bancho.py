@@ -293,6 +293,8 @@ class Player:
 
         self.api_key = extras.get("api_key", None)
 
+        self.votes = extras.get("votes", 0)
+
         # packet queue
         self._queue = bytearray()
 

@@ -32,13 +32,14 @@ from app.utils import make_safe_name
 # | custom_badge_icon | varchar(64)   | YES  |     | NULL    |                |
 # | userpage_content  | varchar(2048) | YES  |     | NULL    |                |
 # | api_key           | char(36)      | YES  | UNI | NULL    |                |
+# | votes             | int           | NO   |     | 0       |                |
 # +-------------------+---------------+------+-----+---------+----------------+
 
 READ_PARAMS = textwrap.dedent(
     """\
         id, name, safe_name, priv, country, silence_end, donor_end, creation_time,
         latest_activity, clan_id, clan_priv, preferred_mode, play_style, custom_badge_name,
-        custom_badge_icon, userpage_content
+        custom_badge_icon, userpage_content, votes
     """,
 )
 
@@ -62,6 +63,7 @@ class Player(TypedDict):
     custom_badge_icon: str | None
     userpage_content: str | None
     api_key: str | None
+    votes: int
 
 
 class PlayerUpdateFields(TypedDict, total=False):
@@ -69,6 +71,7 @@ class PlayerUpdateFields(TypedDict, total=False):
     safe_name: str
     email: str
     priv: int
+    pw_bcrypt: str
     country: str
     silence_end: int
     donor_end: int
@@ -82,6 +85,7 @@ class PlayerUpdateFields(TypedDict, total=False):
     custom_badge_icon: str | None
     userpage_content: str | None
     api_key: str | None
+    votes: int
 
 
 async def create(
@@ -237,6 +241,7 @@ async def update(
     custom_badge_icon: str | None | _UnsetSentinel = UNSET,
     userpage_content: str | None | _UnsetSentinel = UNSET,
     api_key: str | None | _UnsetSentinel = UNSET,
+    votes: int | _UnsetSentinel = UNSET,
 ) -> Player | None:
     """Update a player in the database."""
     update_fields: PlayerUpdateFields = {}
@@ -275,6 +280,8 @@ async def update(
         update_fields["userpage_content"] = userpage_content
     if not isinstance(api_key, _UnsetSentinel):
         update_fields["api_key"] = api_key
+    if not isinstance(votes, _UnsetSentinel):
+        update_fields["votes"] = votes
 
     query = f"""\
         UPDATE users
