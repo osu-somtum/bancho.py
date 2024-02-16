@@ -1966,7 +1966,7 @@ async def difficultyRatingHandler(request: Request) -> Response:
         status_code=status.HTTP_307_TEMPORARY_REDIRECT,
     )
 
-@router.post("/vote-callback")
+@router.get("/vote-callback")
 async def voteCallback(username: str, key: str, request: Request) -> Response:
     # validate the key
     if key != app.settings.OSU_SERVER_LIST_API_KEY:
