@@ -39,7 +39,7 @@ SQL_UPDATES_FILE = Path.cwd() / "migrations/migrations.sql"
 """ session objects """
 
 http_client = httpx.AsyncClient()
-database = databases.Database(app.settings.DB_DSN)
+database = databases.Database(f"{app.settings.DB_DSN}?max_size=20")
 redis: aioredis.Redis = aioredis.from_url(app.settings.REDIS_DSN)
 
 datadog: datadog_client.ThreadStats | None = None
