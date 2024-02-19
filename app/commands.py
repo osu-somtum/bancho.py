@@ -493,6 +493,9 @@ async def _with(ctx: Context) -> str | None:
         except ValueError as ex:
             return f"Could not parse parameter '{arg}'."
 
+    if score_args.acc and (score_args.ngeki or score_args.nkatu or score_args.n50 or score_args.n100):
+        return f"You may only specify accuracy or geki/katu/50s/100s."
+
     result = app.usecases.performance.calculate_performances(
         osu_file_path=str(osu_file_path),
         scores=[score_args],  # calculate one score
