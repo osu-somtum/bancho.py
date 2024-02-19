@@ -192,3 +192,31 @@ def init_api() -> BanchoAPI:
 
 
 asgi_app = init_api()
+
+
+import time
+
+def hook_database_calls() -> None:
+    def _wrap_database_call(func):
+        async def wrapper(*args, **kwargs):
+            start_time = time.perf_counter()
+            response = await func(*args, **kwargs)
+            end_time = time.perf_counter()
+
+            seconds_elapsed = end_time - start_time
+
+            print("\n", args[0], "\n", seconds_elapsed * 1000, "ms", "\n")
+
+            return response
+
+        return wrapper
+
+    import app.state.services
+
+    for attr in ("execute", "execute_many", "fetch_one", "fetch_all"):
+        unwrapped_func = getattr(app.state.services.database, attr)
+        wrapped_func = _wrap_database_call(unwrapped_func)
+        setattr(app.state.services.database, attr, wrapped_func)
+
+    return None
+hook_database_calls()
