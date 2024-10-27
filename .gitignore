@@ -15,3 +15,6 @@ ext/nginx.conf
 tools/cf_records.txt
 /.db-data/
 /.redis-data/
+*.key
+*.pem
+ascii.txt

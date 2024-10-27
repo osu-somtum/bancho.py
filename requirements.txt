@@ -1,6 +1,5 @@
 -i https://pypi.org/simple
 aiomysql==0.2.0
-akatsuki-pp-py==0.9.8; python_version >= '3.7'
 annotated-types==0.5.0; python_version >= '3.7'
 anyio==3.7.1; python_version >= '3.7'
 async-timeout==4.0.3; python_version >= '3.7'

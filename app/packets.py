@@ -783,8 +783,8 @@ def bot_stats(player: Player) -> bytes:
     return write(
         ServerPackets.USER_STATS,
         (player.id, osuTypes.i32),  # id
-        (2, osuTypes.u8),  # action
-        ("with catnip...", osuTypes.string),  # info_text
+        (4, osuTypes.u8),  # action
+        ("Somtum Because too yummy :D", osuTypes.string),  # info_text
         ("", osuTypes.string),  # map_md5
         (0, osuTypes.i32),  # mods
         (0, osuTypes.u8),  # mode

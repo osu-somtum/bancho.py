@@ -494,10 +494,18 @@ class Player:
 
         log(log_msg, Ansi.LRED)
 
+        # getting lastest score id by execute sql query "SELECT id FROM scores WHERE userid = 55 ORDER BY id DESC LIMIT 1;"
+        lastest_score = await app.state.services.database.fetch_val(
+                "SELECT id FROM scores WHERE userid = :userid ORDER BY id DESC LIMIT 1",
+                {"userid": self.id}
+            )
         if app.settings.DISCORD_AUDIT_LOG_WEBHOOK:
+            # getting lastest score id from userid in scores table
             embed = Embed(title="Restriction", timestamp=datetime.utcnow(), color=16711680)
             embed.add_field("Restricted Player", f"[{self.name}]({self.url})", True)
             embed.add_field("Reason", reason, True)
+            # lastest player score
+            embed.add_field("Latest Score", f"https://{app.settings.DOMAIN}/scores/{lastest_score}", True)
             embed.set_footer(text="Moderation Tools")
             embed.set_author(name=admin.name, icon_url=admin.avatar_url, url=admin.url)
             webhook = Webhook(app.settings.DISCORD_AUDIT_LOG_WEBHOOK, embeds=[embed])

@@ -90,15 +90,27 @@ async def bancho_http_handler() -> Response:
     return HTMLResponse(
         f"""
 <!DOCTYPE html>
-<body style="font-family: monospace; white-space: pre-wrap;">Running bancho.py v{app.settings.VERSION}
-
+<body style="font-family: monospace; white-space: pre-wrap;">
+<h1>You don't need to be here!, We still alive and running!</h1><h2>Please checkout our <a href="https://somtum.fun">mainpage</a> Instead!</h2>
+<pre>
+                 .  o ..
+                 o . o o.o
+                      ...oo
+                        __[]__
+                     __|_o_o_o\__
+                     \........../
+                      \. ..  . /
+                 ^^^^^^^^^^^^^^^^^^^^
+</pre>
+Running bancho.py v{app.settings.VERSION}
 <a href="online">{len(players)} online players</a>
 <a href="matches">{len(matches)} matches</a>
+Website: <a href="https://somtum.fun">https://somtum.fun</a>
+Status: <a href="https://status.somtum.fun">https://status.somtum.fun</a>
+Source code <3: <a href="https://github.com/osu-somtum/bancho.py">https://github.com/osu-somtum/bancho.py</a>
 
-<b>packets handled ({len(packets)})</b>
-{new_line.join([f"{packet.name} ({packet.value})" for packet in packets])}
-
-<a href="https://github.com/kokisu/bancho.py">Source code</a>
+Make with love and heart by <a href="https://blueskychan.dev">Phapoom Saksri <3</a>
+Thanks all <a href="https://github.com/osuAkatsuki/bancho.py">bancho.py</a> dev (like <a href="https://github.com/cmyui">cmyui</a>) and <a href="https://akatsuki.gg/">akatsuki</a> for bancho.py and make this day happen!
 </body>
 </html>""",
     )
@@ -189,7 +201,6 @@ async def bancho_handler(
 
     # get the player from the specified osu token.
     player = app.state.sessions.players.get(token=osu_token)
-
     if not player:
         # chances are, we just restarted the server
         # tell their client to reconnect immediately.
@@ -443,18 +454,19 @@ class StatsUpdateRequest(BasePacket):
 
 # Some messages to send on welcome/restricted/etc.
 # TODO: these should probably be moved to the config.
-WELCOME_MSG = f"Successfully verified. Welcome to {BASE_DOMAIN}!"
+WELCOME_MSG = f"Successfully verified. Welcome to {BASE_DOMAIN} naka!"
 
 RESTRICTED_MSG = (
     "Your account is currently in restricted mode. Reason: $REASON.\n"
     "If you believe this is a mistake, the reason is of minor severity, or have waited a period "
-    f"greater than 3 months, you may appeal by creating a support-ticket on our [https://{app.settings.DOMAIN}/discord Discord]."
+    f"greater than 3 months, you may appeal by creating a support-ticket on our [https://{app.settings.DOMAIN}/discord Discord] or email us in accounts@somtum.fun."
 )
 
 OFFLINE_NOTIFICATION = app.packets.notification(
     "The server is currently running in offline mode; "
     "some features will be unavailable.",
 )
+
 
 
 class LoginResponse(TypedDict):
@@ -888,7 +900,6 @@ async def login(
     user_data = app.packets.user_presence(player) + app.packets.user_stats(player)
 
     data += user_data
-
     if not player.restricted:
         # player is unrestricted, two way data
         for o in app.state.sessions.players:
@@ -961,7 +972,7 @@ async def login(
                 recipient=player.name,
                 sender_id=app.state.sessions.bot.id,
             )
-
+            
     else:
         # player is restricted, one way data
         for o in app.state.sessions.players.unrestricted:
@@ -976,13 +987,15 @@ async def login(
                 data += app.packets.user_stats(o)
 
         data += app.packets.account_restricted()
+        # did python have try catch? i forgot
+        
         data += app.packets.send_message(
             sender=app.state.sessions.bot.name,
             msg=RESTRICTED_MSG.replace("$REASON", await player.get_restriction_reason()),
             recipient=player.name,
             sender_id=app.state.sessions.bot.id,
         )
-
+        
     # TODO: some sort of admin panel for staff members?
 
     # add `p` to the global player list,
@@ -1003,6 +1016,8 @@ async def login(
         f"{player} logged in from {country_code} using {login_data['osu_version']} on {user_os}",
         Ansi.LCYAN,
     )
+    
+    
 
     player.update_latest_activity_soon()
 

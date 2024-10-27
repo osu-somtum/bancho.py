@@ -1,8 +1,11 @@
 """ osu: handle connections from web, api, and beyond? """
 from __future__ import annotations
 
+import datetime
+import json
 import copy
 import hashlib
+import os
 import random
 import secrets
 import time
@@ -39,6 +42,7 @@ from fastapi.responses import Response
 from fastapi.routing import APIRouter
 from py3rijndael import Pkcs7Padding
 from py3rijndael import RijndaelCbc
+import requests
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
 import app.packets
@@ -71,19 +75,23 @@ from app.usecases import achievements as achievements_usecases
 from app.usecases import user_achievements as user_achievements_usecases
 from app.utils import escape_enum
 from app.utils import pymysql_encode
-
+from dotenv import load_dotenv
+from app.discord import Webhook, Embed
+import time
 
 BEATMAPS_PATH = SystemPath.cwd() / ".data/osu"
 REPLAYS_PATH = SystemPath.cwd() / ".data/osr"
 SCREENSHOTS_PATH = SystemPath.cwd() / ".data/ss"
 
+load_dotenv()
 
 router = APIRouter(
     tags=["osu! web API"],
     default_response_class=Response,
 )
 
-
+# Get the Discord webhook URL
+webhook_url = os.getenv('DISCORD_RANKS_UPDATE')
 @cache
 def authenticate_player_session(
     param_function: Callable[..., Any],
@@ -837,16 +845,16 @@ async def osuSubmitModularSelector(
         player_eligible = not score.player.priv & Privileges.WHITELISTED and not score.player.restricted
         if score_eligible and player_eligible:
             caps = {
-                0: 800,  #vn!std
+                0: 500,  #vn!std
                 4: 1400, #rx!std
-                8: 600   #ap!std
+                8: 500   #ap!std
             }
 
             # check if pp cap was exceeded
             if score.mode in caps and score.pp >= caps[score.mode]:
                 await score.player.restrict(
                     admin=app.state.sessions.bot,
-                    reason=f"[{score.mode!r} autoban] background check / liveplay requested",
+                    reason=f"[{score.mode!r} autoban] background check / liveplay requested (pp cap exceeded)",
                 )
 
                 # refresh their client state
@@ -857,6 +865,8 @@ async def osuSubmitModularSelector(
 
         if app.state.services.datadog:
             app.state.services.datadog.increment("bancho.submitted_scores")
+        
+            
 
         if score.status == SubmissionStatus.BEST:
             if app.state.services.datadog:
@@ -880,6 +890,8 @@ async def osuSubmitModularSelector(
                 )
 
                 if score.rank == 1 and not score.player.restricted:
+                    # announce #1 score to the discord webhook (app.settings.DISCORD_RANKS_UPDATE)
+                    
                     announce_chan = app.state.sessions.channels.get_by_name("#announce")
 
                     ann = [
@@ -1131,9 +1143,8 @@ async def osuSubmitModularSelector(
         response = b"error: no"
     else:
         # construct and send achievements & ranking charts to the client
-        if score.bmap.awards_ranked_pp and not score.player.restricted:
+        if score.bmap.awards_ranked_pp or score.bmap.id in [2559287] or score.bmap.set_id in [292301] or score.bmap.creator in ["No0b"] and not score.player.restricted:
             unlocked_achievements: list[Achievement] = []
-
             server_achievements = await achievements_usecases.fetch_many()
             player_achievements = await user_achievements_usecases.fetch_many(
                 score.player.id,
@@ -1163,7 +1174,6 @@ async def osuSubmitModularSelector(
             )
         else:
             achievements_str = ""
-
         # create score submission charts for osu! client to display
 
         if score.prev_best:
@@ -1229,6 +1239,14 @@ async def osuSubmitModularSelector(
         f"({score.status!r}, {score.pp:,.2f}pp / {stats.pp:,}pp)",
         Ansi.LGREEN,
     )
+
+    # if score is negative, restrict the player
+    if score.score < -1:
+        await score.player.restrict(
+                    admin=app.state.sessions.bot,
+                    reason=f"[{score.mode!r} autoban] sus scores, how this score overflow int32?",
+                )
+        
 
     return Response(response)
 
@@ -1985,18 +2003,18 @@ async def voteCallback(username: str, key: str, request: Request) -> Response:
         )
     
     log(f"Vote received from {target}!", Ansi.LCYAN)
-    target.send_bot(f"Thank you for voting! Current progress: {(target.votes % 5) + 1}/5 votes ({target.votes + 1} total)")
+    target.send_bot(f"Thank you for voting! Current progress: {(target.votes % 1) + 1}/1 votes ({target.votes + 1} total)")
     
     # add the vote to the user
     target.votes += 1
     await players_repo.update(target.id, votes=target.votes)
 
     # if 5 votes was reached, reward the user with supporter
-    if target.votes % 5 == 0:
-        log(f"{target} receives supporter status through voting 5 times.", Ansi.LMAGENTA)
-        target.send_bot(f"You received a free week of supporter status!")
+    if target.votes % 1 == 0:
+        log(f"{target} receives voter and supporter status through voting 1 time.", Ansi.LMAGENTA)
+        target.send_bot(f"You received a voter and supporter status for 1 day!")
         
-        timespan = 5 * 24 * 60 * 60 + (int(time.time()) if target.donor_end < time.time() else target.donor_end)
+        timespan = 1 * 24 * 60 * 60 + (int(time.time()) if target.donor_end < time.time() else target.donor_end)
         target.donor_end = timespan
         await app.state.services.database.execute(
             "UPDATE users SET donor_end = :end WHERE id = :user_id",
@@ -2004,5 +2022,6 @@ async def voteCallback(username: str, key: str, request: Request) -> Response:
         )
 
         await target.add_privs(Privileges.SUPPORTER)
+        await target.add_privs(Privileges.VOTER)
 
     return Response(status_code=status.HTTP_200_OK)

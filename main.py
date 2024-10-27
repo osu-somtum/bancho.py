@@ -11,43 +11,33 @@ osu! server implementation available.
 we're also fully open source!
 https://github.com/osuAkatsuki/bancho.py
 """
-from __future__ import annotations
-
-__author__ = "Joshua Smith (cmyui)"
-__email__ = "josh@akatsuki.gg"
-__discord__ = "cmyui#0425"
-
 import os
-
-# set working directory to the bancho/ directory.
-os.chdir(os.path.dirname(os.path.realpath(__file__)))
-
 import argparse
 import logging
 import sys
 from collections.abc import Sequence
 import uvicorn
+from starlette.middleware.cors import CORSMiddleware
+from starlette.applications import Starlette
 
 import app.utils
 import app.settings
 from app.logging import Ansi
 from app.logging import log
 
-
 def main(argv: Sequence[str]) -> int:
-    """Ensure runtime environment is ready, and start the server."""
+    # Ensure runtime environment is ready
     app.utils.setup_runtime_environment()
 
     for safety_check in (
-        app.utils.ensure_supported_platform,  # linux only at the moment
-        app.utils.ensure_directory_structure,  # .data/ & achievements/ dir structure
+        app.utils.ensure_supported_platform,
+        app.utils.ensure_directory_structure,
     ):
         exit_code = safety_check()
         if exit_code != 0:
             return exit_code
 
-    """ Parse and handle command-line arguments. """
-
+    # Parse and handle command-line arguments
     parser = argparse.ArgumentParser(
         description=("An open-source osu! server implementation by Akatsuki."),
     )
@@ -57,24 +47,19 @@ def main(argv: Sequence[str]) -> int:
         action="version",
         version=f"%(prog)s v{app.settings.VERSION}",
     )
-
     parser.parse_args(argv)
 
-    """ Server should be safe to start """
-
-    # install any debugging hooks from
-    # _testing/runtime.py, if present
+    # Install any debugging hooks
     app.utils._install_debugging_hooks()
 
-    # check our internet connection status
+    # Check internet connection status
     if not app.utils.check_connection(timeout=1.5):
         log("No internet connection available.", Ansi.LYELLOW)
 
-    # show info & any contextual warnings.
+    # Show info and any contextual warnings
     app.utils.display_startup_dialog()
 
-    # the server supports both inet and unix sockets.
-
+    # Server configuration
     uds = None
     host = None
     port = None
@@ -90,9 +75,6 @@ def main(argv: Sequence[str]) -> int:
         and app.settings.APP_PORT is None
     ):
         uds = app.settings.APP_HOST
-
-        # make sure the socket file does not exist on disk and can be bound
-        # (uvicorn currently does not do this for us, and will raise an exc)
         if os.path.exists(app.settings.APP_HOST):
             if app.utils.processes_listening_on_unix_socket(app.settings.APP_HOST) != 0:
                 log(
@@ -109,24 +91,32 @@ def main(argv: Sequence[str]) -> int:
             % app.settings.APP_HOST,
         ) from None
 
-    # run the server indefinitely
+    # Create the ASGI app
+    asgi_app = Starlette()
+
+    # Apply CORS middleware to allow all origins
+    asgi_app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["*"],
+    )
+
+    # Run the server
     uvicorn.run(
-        "app.api.init_api:asgi_app",
+        "app.api.init_api:asgi_app",  # Pass the ASGI app as an import string
         reload=app.settings.DEBUG,
         log_level=logging.WARNING,
         server_header=False,
         date_header=False,
-        # TODO: uvicorn calls .lower() on the key & value,
-        #       but i would prefer Bancho-Version to keep
-        #       with standards. perhaps look into this.
         headers=[("bancho-version", app.settings.VERSION)],
         uds=uds,
-        host=host or "127.0.0.1",  # uvicorn defaults
-        port=port or 8000,  # uvicorn defaults
+        host=host or "127.0.0.1",
+        port=port or 8000,
     )
 
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))

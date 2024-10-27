@@ -39,7 +39,7 @@ READ_PARAMS = textwrap.dedent(
     """\
         id, name, safe_name, priv, country, silence_end, donor_end, creation_time,
         latest_activity, clan_id, clan_priv, preferred_mode, play_style, custom_badge_name,
-        custom_badge_icon, userpage_content, votes
+        custom_badge_icon, userpage_content, votes, discord_id
     """,
 )
 
@@ -64,6 +64,7 @@ class Player(TypedDict):
     userpage_content: str | None
     api_key: str | None
     votes: int
+    discord_id: int | None
 
 
 class PlayerUpdateFields(TypedDict, total=False):
@@ -86,6 +87,7 @@ class PlayerUpdateFields(TypedDict, total=False):
     userpage_content: str | None
     api_key: str | None
     votes: int
+    discord_id: int | None
 
 
 async def create(
