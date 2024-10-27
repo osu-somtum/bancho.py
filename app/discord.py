@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from tenacity import retry
@@ -141,7 +142,10 @@ class Webhook:
             for key in ("title", "type", "description", "url", "timestamp", "color"):
                 val = getattr(embed, key)
                 if val is not None:
-                    embed_payload[key] = val
+                    if key == "timestamp" and isinstance(val, datetime):
+                        embed_payload[key] = val.isoformat()
+                    else:
+                        embed_payload[key] = val
 
             # class params, must turn into dict
             for key in ("footer", "image", "thumbnail", "video", "provider", "author"):

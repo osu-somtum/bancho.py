@@ -30,6 +30,9 @@ class Player(BaseModel):
     custom_badge_icon: str | None
 
     userpage_content: str | None
+    votes: int
+    discord_id: str | None
+    old_name: str | None
 
 
 class PlayerStatus(BaseModel):

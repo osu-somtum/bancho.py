@@ -883,6 +883,9 @@ def user_stats(player: Player) -> bytes:
         rscore = gm_stats.rscore
         pp = gm_stats.pp
 
+    # Ensure pp is within the valid range for a 16-bit signed integer
+    pp = max(min(pp, 0x7FFF), -0x8000)
+
     return write(
         ServerPackets.USER_STATS,
         (player.id, osuTypes.i32),

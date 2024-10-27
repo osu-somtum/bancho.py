@@ -5,10 +5,10 @@ build:
 	docker build -t bancho:latest .
 
 run:
-	docker compose up bancho mysql redis
+	docker-compose up bancho mysql redis
 
 run-bg:
-	docker compose up -d bancho mysql redis
+	docker-compose up -d bancho mysql redis
 
 run-caddy:
 	caddy run --envfile .env --config ext/Caddyfile

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import datetime
 import hashlib
 import struct
 from pathlib import Path as SystemPath
@@ -17,6 +19,7 @@ from fastapi.security import HTTPAuthorizationCredentials as HTTPCredentials
 from fastapi.security import HTTPBearer
 
 import app.packets
+import app.settings
 import app.state
 import app.usecases.performance
 from app.constants import regexes
@@ -31,7 +34,11 @@ from app.repositories import tourney_pool_maps as tourney_pool_maps_repo
 from app.repositories import tourney_pools as tourney_pools_repo
 from app.repositories import users as users_repo
 from app.usecases.performance import ScoreParams
-
+from app.constants.privileges import Privileges
+from app.repositories import users as players_repo
+# Import discord webhook
+from app.discord import Webhook, Embed
+from app.repositories import maps as maps_repo
 AVATARS_PATH = SystemPath.cwd() / ".data/avatars"
 BEATMAPS_PATH = SystemPath.cwd() / ".data/osu"
 REPLAYS_PATH = SystemPath.cwd() / ".data/osr"
@@ -65,6 +72,17 @@ oauth2_scheme = HTTPBearer(auto_error=False)
 # [Normal]
 # GET /calculate_pp: calculate & return pp for a given beatmap.
 # POST/PUT /set_avatar: Update the tokenholder's avatar to a given file.
+
+# [Somtum API] (beatmap stuff)
+# GET /love_beatmap: love a beatmap by API key
+# GET /rank_beatmap: rank a beatmap by API key
+# GET /cancel_beatmap: cancel a beatmap by API key
+
+# [Somtum API] (moderation stuff)
+# GET /restrict_player: restrict a player by API key
+# GET /unrestrict_player: unrestrict a player by API key
+# GET /whitelist_player: whitelist a player by API key
+
 
 DATETIME_OFFSET = 0x89F7FF5F7B58000
 
@@ -339,7 +357,7 @@ async def api_get_player_status(
 
 @router.get("/get_player_scores")
 async def api_get_player_scores(
-    scope: Literal["recent", "best"],
+    scope: Literal["recent", "best", "first"],
     user_id: int | None = Query(None, alias="id", ge=3, le=2_147_483_647),
     username: str | None = Query(None, alias="name", pattern=regexes.USERNAME.pattern),
     mods_arg: str | None = Query(None, alias="mods"),
@@ -348,7 +366,7 @@ async def api_get_player_scores(
     include_loved: bool = False,
     include_failed: bool = True,
 ) -> Response:
-    """Return a list of a given user's recent/best scores."""
+    """Return a list of a given user's recent/best/first scores."""
     if mode_arg in (
         GameMode.RELAX_MANIA,
         GameMode.AUTOPILOT_CATCH,
@@ -434,10 +452,23 @@ async def api_get_player_scores(
         query.append("AND t.status = 2 AND b.status IN :statuses")
         params["statuses"] = allowed_statuses
         sort = "t.pp"
-    else:
+    elif scope == "recent":
         if not include_failed:
             query.append("AND t.status != 0")
 
+        sort = "t.play_time"
+    else: # "first"
+        lb_sort = "score" if mode_arg <= 3 else "pp" # vanilla goes by score, relax and ap by pp
+        query = [
+            "SELECT t.id, t.map_md5, t.score, t.pp, t.acc, t.max_combo, "
+            "t.mods, t.n300, t.n100, t.n50, t.nmiss, t.ngeki, t.nkatu, t.grade, "
+            "t.status, t.mode, t.time_elapsed, t.play_time, t.perfect "
+            "FROM scores t "
+           f"JOIN (SELECT map_md5, MAX({lb_sort}) AS points FROM scores WHERE status = 2 GROUP BY map_md5) max_scores "
+           f"ON t.map_md5 = max_scores.map_md5 AND t.{lb_sort} = max_scores.points "
+            "INNER JOIN maps b ON max_scores.map_md5 = b.md5 "
+            "WHERE t.userid = :user_id AND t.mode = :mode AND t.status = 2 AND b.status IN (2, 3, 5)"
+        ]
         sort = "t.play_time"
 
     query.append(f"ORDER BY {sort} DESC LIMIT :limit")
@@ -450,25 +481,14 @@ async def api_get_player_scores(
 
     # fetch & return info from sql
     for row in rows:
+        mods = Mods(row["mods"])
         bmap = await Beatmap.from_md5(row.pop("map_md5"))
         row["beatmap"] = bmap.as_dict if bmap else None
-
-    clan: clans_repo.Clan | None = None
-    if player.clan_id:
-        clan = await clans_repo.fetch_one(id=player.clan_id)
+        row["mods_readable"] = mods.__repr__()
 
     player_info = {
         "id": player.id,
         "name": player.name,
-        "clan": (
-            {
-                "id": clan["id"],
-                "name": clan["name"],
-                "tag": clan["tag"],
-            }
-            if clan is not None
-            else None
-        ),
     }
 
     return ORJSONResponse(
@@ -1078,3 +1098,1208 @@ async def api_get_pool(
 #     # write to the avatar file
 #     (AVATARS_PATH / f"{player.id}.{ext}").write_bytes(ava_file)
 #     return JSON({"status": "success."})
+
+# router.get("/vote_beatmap")
+# This API is not for everyone, this api required match osu!api key with config
+# This API Required, discord id, and beatmap set id
+# If discord is is not exist in users table, return error
+# If discord id is match but user is not NAT or Nominate, return error
+# If discord id is match and user is NAT or Nominate, return success
+# Remember, we need api key to match with osu!api key in config
+# They should to be like /vote_beatmap?discord_id=736163902835916880&set_id=7723321&key=osu!api key
+# If osu!api key is not match with config, return error
+# Also discord userid is 18 digit, if not return error
+# DO NOT LIMIT DIGTS OF DISCORD ID OR SET ID
+@router.get("/vote_beatmap")
+async def api_vote_beatmap(
+    discord_id: int | None = Query(None, alias="discord_id", ge=100000000000000000, le=999999999999999999),
+    set_id: int | None = Query(None, alias="set_id", ge=0, le=2_147_483_647),
+    key: str | None = Query(None, alias="key", min_length=1, max_length=64),
+) -> Response:
+    # Print discord_id, set_id, and key
+    print(discord_id, set_id, key)
+    if not discord_id or not set_id or not key:
+        # 400 bad request, response = "Missing required parameters!"
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "Missing required parameters!"
+                },
+            },
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # check did discord id is exist in users table (please check by database)
+    # Please use app.state.services.database.fetch_val
+    user_info = await app.state.services.database.fetch_val(
+        "SELECT * FROM users WHERE discord_id = :discord_id",
+        {"discord_id": discord_id},
+    )
+    print(user_info)
+    if not user_info:
+        # 404 not found, response = "User not found!"
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "User not found!"
+                },
+            },
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    user_info = await players_repo.fetch_one(id=user_info)
+
+    if not user_info["priv"] & (Privileges.NOMINATOR | Privileges.NAT):
+        # 403 forbidden, response = "You are not a nominator or NAT!"
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "You are not a nominator or NAT!"
+                },
+            },
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+
+    if key != app.settings.OSU_API_KEY:
+        # Sucess = false, 403 forbidden, response = "Invalid osu!api key"
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "Invalid osu!api key!"
+                },
+            },
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    # Check did beatmap set id is already ranked or not
+    # Please use app.state.services.database.fetch_val
+    # If status = 2, that mean beatmap is already ranked
+    # If status = 3, that mean beatmap is already loved
+    # If status = 4, that mean beatmap is already qualified
+    # We will vote only if status is 0 or 1
+    beatmap_info = await app.state.services.database.fetch_val(
+        "SELECT status FROM maps WHERE set_id = :set_id",
+        {"set_id": set_id},
+    )
+    if beatmap_info in (2, 3, 4, 5):
+        # status is true but response is already ranked, 403 forbidden
+        # do like success but do not include vote count and need count
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "Beatmap is already ranked, loved, or qualified!"
+                },
+            },
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    else:
+        # Check did user already vote or not in redis
+        # If user already vote, return error
+        # If user not vote, return success
+        # Please use app.state.services.redis.get
+        userid = user_info["id"]
+        vote = await app.state.services.redis.get(f"vote:{userid}:{set_id}")
+        # If user already vote
+        if vote:
+            # status is true but response is already voted, 403 forbidden
+            # do like success but do not include vote count and need count
+            return ORJSONResponse(
+                {
+                        "success": False,
+                        "response": {
+                            "message": "You have already voted this beatmap!"
+                        },
+                    },
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+        else:
+            # Check, did beatmap ever get vote or not
+            # If beatmap already get vote, increment vote by 1
+            # If beatmap not get vote, set vote to 1 and return like Now beatmap has 1/2 votes for qualification. One more vote is needed!
+            
+            # Check did beatmap already get vote or not
+            # Please use app.state.services.redis.get
+            # Check by if end with :set_id, that mean beatmap already get vote
+            # If not, that mean beatmap not get vote
+            # check did beatmap set_id is exist in database?
+            # Please use app.state.services.database.fetch_val
+            # If not exist, return error
+            # If exist, continue
+            beatmap_info = await app.state.services.database.fetch_val(
+                "SELECT set_id FROM maps WHERE set_id = :set_id",
+                {"set_id": set_id},
+            )
+            if not beatmap_info:
+                # sucess = false, 404 not found, response = "Beatmap not found"
+                return ORJSONResponse(
+                    {
+                        "success": False,
+                        "response": {
+                            "message": "Beatmap not found! (Please recheck your beatmap set_id!)"
+                        },
+                    },
+                    status_code=status.HTTP_404_NOT_FOUND,
+                )
+            vote_key = f"vote:{userid}:{set_id}"
+            # Define the key pattern
+            vote_key_map = f"vote:*:{set_id}"
+            vote_key_pattern = f"vote:{userid}:{set_id}"
+
+            # Use scan_iter to get an async iterator of keys that match the pattern
+            vote_keys = app.state.services.redis.scan_iter(match=vote_key_pattern)
+            vote_maps = app.state.services.redis.scan_iter(match=vote_key_map)
+            # Create an empty list to store the keys
+            vote_keys_list = []
+            vote_maps_list = []
+            # Use an async for loop to iterate over the async generator
+            async for key in vote_keys:
+                vote_keys_list.append(key)
+            async for key in vote_maps:
+                vote_maps_list.append(key)
+
+            # Initialize vote_count
+            vote_count = None
+
+            # Get the vote count from Redis
+            vote_count = len(vote_maps_list)
+            print(vote_count)
+            if vote_count is None:
+                await app.state.services.redis.set(vote_key, 1)
+                vote_count = '1'
+            elif isinstance(vote_count, int):
+                await app.state.services.redis.incr(vote_key)
+                vote_count = str(vote_count + 1)
+            else:
+                return "Error: vote count is not an integer."
+            print(vote_count)
+            if vote_count == '1':
+                # Send webhook to discord
+                # Getting beatmap info by database
+                beatmap_info = await app.state.services.database.fetch_one(
+                    "SELECT * FROM maps WHERE set_id = :set_id",
+                    {"set_id": set_id},
+                )
+                print(beatmap_info)
+                # Get username of user
+                username = user_info["name"]
+                # We need artist, title, version, creator, and set_id
+                artist = beatmap_info["artist"]
+                title = beatmap_info["title"]
+                creator = beatmap_info["creator"]
+                # Send to discord webhook nomination
+                webhook = Webhook(url=app.settings.DISCORD_QUALIFIED_WEBHOOK)
+                # Tell beatmap info and clickable link to osu!bancho
+                # like [artist - title (version) by creator](https://osu.ppy.sh/beatmapsets/set_id) has 1/2 votes for qualification. One more vote is needed!
+                embed = Embed(
+                    title="Beatmap Nomination",
+                    description=f"[{artist} - {title} by {creator}](https://osu.ppy.sh/beatmapsets/{set_id}) has 1/2 votes for qualification. (Vote by {username}) One more vote is needed!",
+                    color=0x808080
+                )
+                embed.set_image(url=f"https://assets.ppy.sh/beatmaps/{set_id}/covers/card.jpg")
+                # Send the webhook
+                webhook.add_embed(embed)
+                await asyncio.create_task(webhook.post())
+                # Make respone like this
+                #{
+                #    "status": true,
+                #    "response": {
+                #        "message": "You have nominated this map, this mapset need 1 more vote for qualified status",
+                #        "votes": 1,
+                #        "need" : 1
+                #    }
+                #}
+                # status will be true because they are successfully
+                return ORJSONResponse(
+                    {
+                        "success": True,
+                        "response": {
+                            "message": "You have nominated this map, this mapset need 1 more vote for qualified status!",
+                            "votes": int(vote_count),
+                            "need": 1
+                        },
+                    },
+                    status_code=status.HTTP_200_OK,
+                )
+            else:
+                print(vote_count)
+                print("Qualified")
+                # Qualified beatmap, edit value in database to 4
+                await app.state.services.database.execute(
+                    "UPDATE maps SET status = 4 WHERE set_id = :set_id",
+                    {"set_id": set_id},
+                )
+                # delete vote from redis key
+                await app.state.services.redis.delete(vote_key)
+                # set beatmap change_date to current time
+                await app.state.services.database.execute(
+                    "UPDATE maps SET change_date = now() WHERE set_id = :set_id",
+                    {"set_id": set_id}
+                )
+                    
+                # Get beatmap id, not set id
+                ids = await app.state.services.database.fetch_all(
+                "SELECT id FROM maps WHERE set_id = :set_id",
+                {"set_id": set_id}
+                )
+                for idmap in ids:
+                    print(idmap)
+                    md5 = await app.state.services.database.fetch_val(
+                        "SELECT md5 FROM maps WHERE id = :id",
+                        {"id": idmap}
+                    )
+                    if md5 in app.state.cache.beatmap:
+                        app.state.cache.beatmap[md5].status = 2
+                        app.state.cache.beatmap[md5].frozen = True
+                    # delete request from map_requests (map_id)
+                    await app.state.services.database.execute(
+                        "DELETE FROM map_requests WHERE map_id = :id",
+                        {"id": idmap}
+                    )
+                    
+                # Send to discord webhook
+                # Getting beatmap info by database
+                beatmap_info = await app.state.services.database.fetch_one(
+                    "SELECT * FROM maps WHERE set_id = :set_id",
+                    {"set_id": set_id},
+                )
+                # Send to discord webhook qualification
+                
+                # We need artist, title, version, creator, and set_id
+                artist = beatmap_info["artist"]
+                title = beatmap_info["title"]
+                creator = beatmap_info["creator"]
+                # Get username of user
+                username = user_info["name"]
+                if webhook_url := app.settings.DISCORD_QUALIFIED_WEBHOOK:
+                    embed = Embed(title="", description=f"[{artist} - {title} ({creator})](https://osu.ppy.sh/beatmapsets/{set_id}) is now qualified! (Lastest vote by {username})", timestamp=datetime.datetime.utcnow(), color=52478)
+                    embed.set_author(name="Automatic Status Bot (Click to get beatmap!)", icon_url="https://a.ppy.sh/1", url=f"https://osu.ppy.sh/beatmapsets/{set_id}")
+                    embed.set_image(url=f"https://assets.ppy.sh/beatmaps/{set_id}/covers/card.jpg")
+                    embed.set_footer(text="Nomination Tools")
+                    embed.color = 0x00FF00
+                    webhook = Webhook(webhook_url, embeds=[embed])
+                await asyncio.create_task(webhook.post())
+                if webhook_url := app.settings.DISCORD_NOMINATION_WEBHOOK:
+                    embed = Embed(title="", description=f"[{artist} - {title} ({creator})](https://osu.ppy.sh/beatmapsets/{set_id}) is now qualified!", timestamp=datetime.datetime.utcnow(), color=52478)
+                    embed.set_author(name="Automatic Status Bot (Click to get beatmap!)", icon_url="https://a.ppy.sh/1", url=f"https://osu.ppy.sh/beatmapsets/{set_id}")
+                    embed.set_image(url=f"https://assets.ppy.sh/beatmaps/{set_id}/covers/card.jpg")
+                    embed.set_footer(text="Nomination Tools")
+                    embed.color = 0x00FF00
+                    webhook = Webhook(webhook_url, embeds=[embed])
+                await asyncio.create_task(webhook.post())
+                    
+                return ORJSONResponse(
+                    {
+                        "success": True,
+                        "response": {
+                            "message": "You have nominated this map, this mapset has been qualified!",
+                            "votes": int(vote_count),
+                            "need": 0
+                        },
+                    },
+                    status_code=status.HTTP_200_OK,
+                )
+# Give me example of api
+# /vote_beatmap?discord_id=736163902835916880&set_id=772
+
+# /love_beatmap, only for NAT, need discord id and set id and osu!api key that match with config
+# they kinda same with vote beatmap, but this is for loved beatmap, and no need to vote, if beatmap is already love, return error, if beatmap is already ranked, return error
+# If discord id is is not exist in users table, return error
+# If discord id is match but user is not NAT, return error
+# If discord id is match and user is NAT, return success
+# Remember, we need api key to match with osu!api key in config
+# They should to be like /love_beatmap?discord_id=736163902835916880&set_id=
+# If osu!api key is not match with config, return error
+# Also discord userid is 18 digit, if not return error
+@router.get("/love_beatmap")
+async def api_love_beatmap(
+    discord_id: int | None = Query(None, alias="discord_id", ge=100000000000000000, le=999999999999999999),
+    set_id: int | None = Query(None, alias="set_id", ge=0, le=2_147_483_647),
+    key: str | None = Query(None, alias="key", min_length=1, max_length=64),
+) -> Response:
+    # Print discord_id, set_id, and key
+    print(discord_id, set_id, key)
+    if not discord_id or not set_id or not key:
+        # 400 bad request, response = "Missing required parameters!"
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "Missing required parameters!"
+                },
+            },
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # check did discord id is exist in users table (please check by database)
+    # Please use app.state.services.database.fetch_val
+    user_info = await app.state.services.database.fetch_val(
+        "SELECT * FROM users WHERE discord_id = :discord_id",
+        {"discord_id": discord_id},
+    )
+    print(user_info)
+    if not user_info:
+        # 404 not found, response = "User not found!"
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "User not found!"
+                },
+            },
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    user_info = await players_repo.fetch_one(id=user_info)
+
+    if not user_info["priv"] & Privileges.NAT:
+        # 403 forbidden, response = "You are not a NAT!"
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "You are not a NAT!"
+                },
+            },
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+
+    if key != app.settings.OSU_API_KEY:
+        # Sucess = false, 403 forbidden, response = "Invalid osu!api key"
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "Invalid osu!api key!"
+                },
+            },
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    # Check did beatmap set id is already ranked or not
+    # Please use app.state.services.database.fetch_val
+    # If status = 2, that mean beatmap is already ranked
+    # If status = 3, that mean beatmap is already loved
+    # If status = 4, that mean beatmap is already qualified
+    # We will vote only if status is 0 or 1
+    beatmap_info = await app.state.services.database.fetch_val(
+        "SELECT status FROM maps WHERE set_id = :set_id",
+        {"set_id": set_id},
+    )
+    if beatmap_info in (2, 3, 4, 5):
+        # status is true but response is already ranked, 403 forbidden
+        # do like success but do not include vote count and need count
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "Beatmap is already ranked, loved, or qualified!"
+                },
+            },
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    else:
+        # Check did beatmap set id is exist in database?
+        # Please use app.state.services.database.fetch_val
+        # If not exist, return error
+        # If exist, continue
+        beatmap_info = await app.state.services.database.fetch_val(
+            "SELECT set_id FROM maps WHERE set_id = :set_id",
+            {"set_id": set_id},
+        )
+        if not beatmap_info:
+            # sucess = false, 404 not found, response = "Beatmap not found"
+            return ORJSONResponse(
+                {
+                    "success": False,
+                    "response": {
+                        "message": "Beatmap not found! (Please recheck your beatmap set_id!)"
+                    },
+                },
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+        # Loveable beatmap, edit value in database to 5
+        print(set_id)
+        await app.state.services.database.execute(
+            "UPDATE maps SET status = 5 WHERE set_id = :set_id",
+            {"set_id": set_id},
+        )
+        print("Loved")
+        # set beatmap change_date to current time
+        await app.state.services.database.execute(
+            "UPDATE maps SET change_date = now() WHERE set_id = :set_id",
+            {"set_id": set_id}
+        )
+        # Get beatmap id, not set id
+        ids = await app.state.services.database.fetch_all(
+        "SELECT id FROM maps WHERE set_id = :set_id",
+        {"set_id": set_id}
+        )
+        for idmap in ids:
+            idmap = idmap["id"]
+            print(idmap)
+            md5 = await app.state.services.database.fetch_val(
+                "SELECT md5 FROM maps WHERE id = :id",
+                {"id": idmap}
+            )
+            # update map by map_id
+            await maps_repo.partial_update(idmap, status=5, frozen=True)
+            if md5 in app.state.cache.beatmap:
+                app.state.cache.beatmap[md5].status = 5
+                app.state.cache.beatmap[md5].frozen = True
+            # delete request from map_requests (map_id)
+            await app.state.services.database.execute(
+                "DELETE FROM map_requests WHERE map_id = :id",
+                {"id": idmap}
+            )
+        # Send to discord webhook
+        # Getting beatmap info by database
+        beatmap_info = await app.state.services.database.fetch_one(
+            "SELECT * FROM maps WHERE set_id = :set_id",
+            {"set_id": set_id},
+        )
+        # Send to discord webhook nomination
+        # We need artist, title, version, creator, and set_id
+        artist = beatmap_info["artist"]
+        title = beatmap_info["title"]
+        creator = beatmap_info["creator"]
+        # Get username of user
+        username = user_info["name"]
+        if webhook_url := app.settings.DISCORD_NOMINATION_WEBHOOK:
+            embed = Embed(title="", description=f"[{artist} - {title} ({creator})](https://osu.ppy.sh/beatmapsets/{set_id}) is now loved! (by {username})", timestamp=datetime.datetime.utcnow(), color=52478)
+            embed.set_author(name="Automatic Status Bot (Click to get beatmap!)", icon_url="https://a.ppy.sh/1", url=f"https://osu.ppy.sh/beatmapsets/{set_id}")
+            embed.set_image(url=f"https://assets.ppy.sh/beatmaps/{set_id}/covers/card.jpg")
+            embed.set_footer(text="Nomination Tools")
+            embed.color = 0xFF69B4
+            webhook = Webhook(webhook_url, embeds=[embed])
+        await asyncio.create_task(webhook.post())
+        return ORJSONResponse(
+            {
+                "success": True,
+                "response": {
+                    "message": "Now, this mapset has been loved!",
+                },
+            },
+            status_code=status.HTTP_200_OK,
+        )
+# Give me example of api
+# /love_beatmap?discord_id=736163902835916880&set_id=772?key=osu!api key
+
+# /rank_beatmap, only for NAT, need discord id and set id and osu!api key that match with config
+# they kinda same with love_beatmap, but this is for ranked beatmap, and no need to vote, if beatmap is already love, return error, if beatmap is already ranked, return error
+@router.get("/rank_beatmap")
+async def api_rank_beatmap(
+    discord_id: int | None = Query(None, alias="discord_id", ge=100000000000000000, le=999999999999999999),
+    set_id: int | None = Query(None, alias="set_id", ge=0, le=2_147_483_647),
+    key: str | None = Query(None, alias="key", min_length=1, max_length=64),
+) -> Response:
+    # Print discord_id, set_id, and key
+    print(discord_id, set_id, key)
+    if not discord_id or not set_id or not key:
+        # 400 bad request, response = "Missing required parameters!"
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "Missing required parameters!"
+                },
+            },
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # check did discord id is exist in users table (please check by database)
+    # Please use app.state.services.database.fetch_val
+    user_info = await app.state.services.database.fetch_val(
+        "SELECT * FROM users WHERE discord_id = :discord_id",
+        {"discord_id": discord_id},
+    )
+    print(user_info)
+    if not user_info:
+        # 404 not found, response = "User not found!"
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "User not found!"
+                },
+            },
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    user_info = await players_repo.fetch_one(id=user_info)
+
+    if not user_info["priv"] & Privileges.NAT:
+        # 403 forbidden, response = "You are not a NAT!"
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "You are not a NAT!"
+                },
+            },
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+
+    if key != app.settings.OSU_API_KEY:
+        # Sucess = false, 403 forbidden, response = "Invalid osu!api key"
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "Invalid osu!api key!"
+                },
+            },
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    # Check did beatmap set id is already ranked or not
+    # Please use app.state.services.database.fetch_val
+    # If status = 2, that mean beatmap is already ranked
+    # If status = 4, that mean beatmap is already qualified
+    # We will vote only if status is 0 or 1
+    beatmap_info = await app.state.services.database.fetch_val(
+        "SELECT status FROM maps WHERE set_id = :set_id",
+        {"set_id": set_id},
+    )
+    if beatmap_info in (2, 4, 5):
+        # status is true but response is already ranked, 403 forbidden
+        # do like success but do not include vote count and need count
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "Beatmap is already ranked, or qualified!"
+                },
+            },
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    else:
+        # Check did beatmap set id is exist in database?
+        # Please use app.state.services.database.fetch_val
+        # If not exist, return error
+        # If exist, continue
+        beatmap_info = await app.state.services.database.fetch_val(
+            "SELECT set_id FROM maps WHERE set_id = :set_id",
+            {"set_id": set_id},
+        )
+        if not beatmap_info:
+            # sucess = false, 404 not found, response = "Beatmap not found"
+            return ORJSONResponse(
+                {
+                    "success": False,
+                    "response": {
+                        "message": "Beatmap not found! (Please recheck your beatmap set_id!)"
+                    },
+                },
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+        # Loveable beatmap, edit value in database to 2
+        print(set_id)
+        await app.state.services.database.execute(
+            "UPDATE maps SET status = 2 WHERE set_id = :set_id",
+            {"set_id": set_id},
+        )
+        print("Ranked")
+        # set beatmap change_date to current time
+        await app.state.services.database.execute(
+            "UPDATE maps SET change_date = now() WHERE set_id = :set_id",
+            {"set_id": set_id}
+        )
+        # Get beatmap id, not set id
+        ids = await app.state.services.database.fetch_all(
+        "SELECT id FROM maps WHERE set_id = :set_id",
+        {"set_id": set_id}
+        )
+        for idmap in ids:
+            idmap = idmap["id"]
+            print(idmap)
+            md5 = await app.state.services.database.fetch_val(
+                "SELECT md5 FROM maps WHERE id = :id",
+                {"id": idmap}
+            )
+            # update map by map_id
+            await maps_repo.partial_update(idmap, status=2, frozen=True)
+            if md5 in app.state.cache.beatmap:
+                app.state.cache.beatmap[md5].status = 2
+                app.state.cache.beatmap[md5].frozen = True
+            # delete request from map_requests (map_id)
+            await app.state.services.database.execute(
+                "DELETE FROM map_requests WHERE map_id = :id",
+                {"id": idmap}
+            )
+        # Send to discord webhook
+        # Getting beatmap info by database
+        beatmap_info = await app.state.services.database.fetch_one(
+            "SELECT * FROM maps WHERE set_id = :set_id",
+            {"set_id": set_id},
+        )
+        # Send to discord webhook nomination
+        # We need artist, title, version, creator, and set_id
+        artist = beatmap_info["artist"]
+        title = beatmap_info["title"]
+        creator = beatmap_info["creator"]
+        # Get username of user
+        username = user_info["name"]
+        if webhook_url := app.settings.DISCORD_NOMINATION_WEBHOOK:
+            embed = Embed(title="", description=f"[{artist} - {title} ({creator})](https://osu.ppy.sh/beatmapsets/{set_id}) is now ranked! (by {username})", timestamp=datetime.datetime.utcnow(), color=52478)
+            embed.set_author(name="Automatic Status Bot (Click to get beatmap!)", icon_url="https://a.ppy.sh/1", url=f"https://osu.ppy.sh/beatmapsets/{set_id}")
+            embed.set_image(url=f"https://assets.ppy.sh/beatmaps/{set_id}/covers/card.jpg")
+            embed.set_footer(text="Nomination Tools")
+            # Blue color
+            embed.color = 0x0000FF
+            webhook = Webhook(webhook_url, embeds=[embed])
+        await asyncio.create_task(webhook.post())
+        return ORJSONResponse(
+            {
+                "success": True,
+                "response": {
+                    "message": "Now, this mapset has been ranked!",
+                },
+            },
+            status_code=status.HTTP_200_OK,
+        )
+# Give me example of api
+# /rank_beatmap?discord_id=736163902835916880&set_id=772
+
+# /cancel_beatmap, only for NAT, need discord id and set id and osu!api key that match with config
+# cancel beatmap is for cancel beatmap it going qualified in soon, by deleting all beatmapset id in database
+# if beatmap is already love, return error, if beatmap is already ranked, return error
+@router.get("/cancel_beatmap")
+async def api_cancel_beatmap(
+    discord_id: int | None = Query(None, alias="discord_id", ge=100000000000000000, le=999999999999999999),
+    set_id: int | None = Query(None, alias="set_id", ge=0, le=2_147_483_647),
+    key: str | None = Query(None, alias="key", min_length=1, max_length=64),
+) -> Response:
+    # Print discord_id, set_id, and key
+    print(discord_id, set_id, key)
+    if not discord_id or not set_id or not key:
+        # 400 bad request, response = "Missing required parameters!"
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "Missing required parameters!"
+                },
+            },
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # check did discord id is exist in users table (please check by database)
+    # Please use app.state.services.database.fetch_val
+    user_info = await app.state.services.database.fetch_val(
+        "SELECT * FROM users WHERE discord_id = :discord_id",
+        {"discord_id": discord_id},
+    )
+    print(user_info)
+    if not user_info:
+        # 404 not found, response = "User not found!"
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "User not found!"
+                },
+            },
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    user_info = await players_repo.fetch_one(id=user_info)
+
+    if not user_info["priv"] & Privileges.NAT:
+        # 403 forbidden, response = "You are not a NAT!"
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "You are not a NAT!"
+                },
+            },
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+
+    if key != app.settings.OSU_API_KEY:
+        # Sucess = false, 403 forbidden, response = "Invalid osu!api key"
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "Invalid osu!api key!"
+                },
+            },
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    # Check did beatmap set id is already ranked or not
+    # Please use app.state.services.database.fetch_val
+    # If status = 2, that mean beatmap is already ranked
+    # If status = 3, that mean beatmap is already loved
+    # If status = 4, that mean beatmap is already qualified
+    # We will vote only if status is 0 or 1
+    beatmap_info = await app.state.services.database.fetch_val(
+        "SELECT status FROM maps WHERE set_id = :set_id",
+        {"set_id": set_id},
+    )
+    if beatmap_info in (2, 3, 5):
+        # status is true but response is already ranked, 403 forbidden
+        # do like success but do not include vote count and need count
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "Beatmap is already ranked, loved, or qualified!"
+                },
+            },
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    else:
+        # Check did beatmap set id is exist in database?
+        # Please use app.state.services.database.fetch_val
+        # If not exist, return error
+        # If exist, continue
+        beatmap_info = await app.state.services.database.fetch_val(
+            "SELECT set_id FROM maps WHERE set_id = :set_id",
+            {"set_id": set_id},
+        )
+        if not beatmap_info:
+            # sucess = false, 404 not found, response = "Beatmap not found"
+            return ORJSONResponse(
+                {
+                    "success": False,
+                    "response": {
+                        "message": "Beatmap not found! (Please recheck your beatmap set_id!)"
+                    },
+                },
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+        # Loveable beatmap, edit value in database to 0
+        print(set_id)
+        await app.state.services.database.execute(
+            "UPDATE maps SET status = 0 WHERE set_id = :set_id",
+            {"set_id": set_id},
+        )
+        print("Canceled")
+        # set beatmap change_date to current time
+        await app.state.services.database.execute(
+            "UPDATE maps SET change_date = now() WHERE set_id = :set_id",
+            {"set_id": set_id}
+        )
+        # Get beatmap id, not set id
+        ids = await app.state.services.database.fetch_all(
+        "SELECT id FROM maps WHERE set_id = :set_id",
+        {"set_id": set_id}
+        )
+        for idmap in ids:
+            idmap = idmap["id"]
+            print(idmap)
+            md5 = await app.state.services.database.fetch_val(
+                "SELECT md5 FROM maps WHERE id = :id",
+                {"id": idmap}
+            )
+            # update map by map_id
+            await maps_repo.partial_update(idmap, status=0, frozen=False)
+            if md5 in app.state.cache.beatmap:
+                app.state.cache.beatmap[md5].status = 0
+                app.state.cache.beatmap[md5].frozen = False
+            # delete request from map_requests (map_id)
+            await app.state.services.database.execute(
+                "DELETE FROM map_requests WHERE map_id = :id",
+                {"id": idmap}
+            )
+        # Send to discord webhook
+        # Getting beatmap info by database
+        beatmap_info = await app.state.services.database.fetch_one(
+            "SELECT * FROM maps WHERE set_id = :set_id",
+            {"set_id": set_id},
+        )
+        # Send to discord webhook nomination
+        # We need artist, title, version, creator, and set_id
+        artist = beatmap_info["artist"]
+        title = beatmap_info["title"]
+        creator = beatmap_info["creator"]
+        # Get username of user
+        username = user_info["name"]
+        if webhook_url := app.settings.DISCORD_NOMINATION_WEBHOOK:
+            embed = Embed(title="", description=f"[{artist} - {title} ({creator})](https://osu.ppy.sh/beatmapsets/{set_id}) is now canceled! (by {username})", timestamp=datetime.datetime.utcnow(), color=52478)
+            embed.set_author(name="Automatic Status Bot (Click to get beatmap!)", icon_url="https://a.ppy.sh/1", url=f"https://osu.ppy.sh/beatmapsets/{set_id}")
+            embed.set_image(url=f"https://assets.ppy.sh/beatmaps/{set_id}/covers/card.jpg")
+            embed.set_footer(text="Nomination Tools")
+            # Red color
+            embed.color = 0xFF0000
+            webhook = Webhook(webhook_url, embeds=[embed])
+        await asyncio.create_task(webhook.post())
+        # Send to discord webhook qualification
+        if webhook_url := app.settings.DISCORD_QUALIFIED_WEBHOOK:
+            embed = Embed(title="", description=f"[{artist} - {title} ({creator})](https://osu.ppy.sh/beatmapsets/{set_id}) is now canceled!", timestamp=datetime.datetime.utcnow(), color=52478)
+            embed.set_author(name="Automatic Status Bot (Click to get beatmap!)", icon_url="https://a.ppy.sh/1", url=f"https://osu.ppy.sh/beatmapsets/{set_id}")
+            embed.set_image(url=f"https://assets.ppy.sh/beatmaps/{set_id}/covers/card.jpg")
+            embed.set_footer(text="Nomination Tools")
+            # Red color
+            embed.color = 0xFF0000
+            webhook = Webhook(webhook_url, embeds=[embed])
+        await asyncio.create_task(webhook.post())
+        return ORJSONResponse(
+            {
+                "success": True,
+                "response": {
+                    "message": "Now, this mapset has been canceled!",
+                },
+            },
+            status_code=status.HTTP_200_OK,
+        )
+# Give me example of api
+# /cancel_beatmap?discord_id=736163902835916880&set_id=772
+
+# /restrict_player, only for Staff, need discord id and osu!api key that match with config
+# restrict player is for restrict player from playing, if player is already restricted, return error
+# discord_id for staff, player name is target player to restrict, and reason is reason to restrict player
+# target = await app.state.sessions.players.from_cache_or_sql(name=username)
+@router.get("/restrict_player")
+async def api_restrict_player(
+    discord_id: int | None = Query(None, alias="discord_id", ge=100000000000000000, le=999999999999999999),
+    username: str | None = Query(None, alias="username", pattern=regexes.USERNAME.pattern),
+    reason: str | None = Query(None, alias="reason", min_length=1, max_length=128),
+    key: str | None = Query(None, alias="key", min_length=1, max_length=64),
+) -> Response:
+    # Print discord_id, username, reason, and key
+    print(discord_id, username, reason, key)
+    if not discord_id or not username or not reason or not key:
+        # 400 bad request, response = "Missing required parameters!"
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "Missing required parameters!"
+                },
+            },
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # check did discord id is exist in users table (please check by database)
+    # Please use app.state.services.database.fetch_val
+    user_info = await app.state.services.database.fetch_val(
+        "SELECT * FROM users WHERE discord_id = :discord_id",
+        {"discord_id": discord_id},
+    )
+    print(user_info)
+    if not user_info:
+        # 404 not found, response = "User not found!"
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "User not found!"
+                },
+            },
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    user_info = await players_repo.fetch_one(id=user_info)
+
+    if not user_info["priv"] & Privileges.STAFF:
+        # 403 forbidden, response = "You are not a Staff!"
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "You are not a Staff!"
+                },
+            },
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+
+    if key != app.settings.OSU_API_KEY:
+        # Sucess = false, 403 forbidden, response = "Invalid osu!api key"
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "Invalid osu!api key!"
+                },
+            },
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    # Check did player is already restricted or not
+    # Please use app.state.services.database.fetch_val
+    # If status = 0, that mean player is not restricted
+    # If status = 1, that mean player is restricted
+    # We will restrict only if status is 0
+    target = await app.state.sessions.players.from_cache_or_sql(name=username)
+    if not target:
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "Player not found!"
+                },
+            },
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    # If user is not developer and trying to restrict staff or developer, return error
+    if target.priv & Privileges.STAFF or target.priv & Privileges.DEVELOPER:
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "You can't restrict staff or developer!"
+                },
+            },
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    # If user is not developer and trying to restrict themselves, return error
+    if target.id == user_info["id"]:
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "You can't restrict yourself!"
+                },
+            },
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    # If target is already restricted, return error
+    if target.restricted:
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "Player is already restricted!"
+                },
+            },
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    # Restrict player
+    # Getting admin info
+    admin = await app.state.sessions.players.from_cache_or_sql(name=user_info["name"])
+    await target.restrict(admin=admin, reason=reason)
+    # refresh thier client state
+    if target.is_online:
+        target.logout()
+    return ORJSONResponse(
+        {
+            "success": True,
+            "response": {
+                "message": "Player has been restricted!",
+                "reason" : reason
+            },
+        },
+        status_code=status.HTTP_200_OK,
+    )
+# Give me example of api
+# /restrict_player?discord_id=736163902835916880&username=Koi&reason=Bad%20player      
+
+#/unrestrict_player, only for Staff, need discord id and osu!api key that match with config
+# same with restrict player, but this is for unrestrict player
+@router.get("/unrestrict_player")
+async def api_unrestrict_player(
+    discord_id: int | None = Query(None, alias="discord_id", ge=100000000000000000, le=999999999999999999),
+    username: str | None = Query(None, alias="username", pattern=regexes.USERNAME.pattern),
+    reason: str | None = Query(None, alias="reason", min_length=1, max_length=128),
+    key: str | None = Query(None, alias="key", min_length=1, max_length=64),
+) -> Response:
+    # Print discord_id, username, reason, and key
+    print(discord_id, username, reason, key)
+    if not discord_id or not username or not reason or not key:
+        # 400 bad request, response = "Missing required parameters!"
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "Missing required parameters!"
+                },
+            },
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # check did discord id is exist in users table (please check by database)
+    # Please use app.state.services.database.fetch_val
+    user_info = await app.state.services.database.fetch_val(
+        "SELECT * FROM users WHERE discord_id = :discord_id",
+        {"discord_id": discord_id},
+    )
+    print(user_info)
+    if not user_info:
+        # 404 not found, response = "User not found!"
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "User not found!"
+                },
+            },
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    user_info = await players_repo.fetch_one(id=user_info)
+
+    if not user_info["priv"] & Privileges.STAFF:
+        # 403 forbidden, response = "You are not a Staff!"
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "You are not a Staff!"
+                },
+            },
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+
+    if key != app.settings.OSU_API_KEY:
+        # Sucess = false, 403 forbidden, response = "Invalid osu!api key"
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "Invalid osu!api key!"
+                },
+            },
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    # Check did player is already restricted or not
+    # Please use app.state.services.database.fetch_val
+    # If status = 0, that mean player is not restricted
+    # If status = 1, that mean player is restricted
+    # We will restrict only if status is 0
+    target = await app.state.sessions.players.from_cache_or_sql(name=username)
+    if not target:
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "Player not found!"
+                },
+            },
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    # If target player is not restricted, return error
+    if not target.restricted:
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "Player is not restricted!"
+                },
+            },
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    # Unrestrict player
+    # Getting admin info
+    admin = await app.state.sessions.players.from_cache_or_sql(name=user_info["name"])
+    await target.unrestrict(admin=admin, reason=reason)
+    return ORJSONResponse(
+        {
+            "success": True,
+            "response": {
+                "message": "Player has been unrestricted!",
+                "reason" : reason
+            },
+        },
+        status_code=status.HTTP_200_OK,
+    )
+# Give me example of api
+# /unrestrict_player?discord_id=736163902835916880&username=Koi&reason=Bad%20player
+
+#/whitelist_player, only for Staff, need discord id and osu!api key that match with config
+# We need only discord_id of staff, username of player, osu!api key to verify, it is, no any other parameters need
+# If player is already whitelisted, return error
+@router.get("/whitelist_player")
+async def api_whitelist_player(
+    discord_id: int | None = Query(None, alias="discord_id", ge=100000000000000000, le=999999999999999999),
+    username: str | None = Query(None, alias="username", pattern=regexes.USERNAME.pattern),
+    key: str | None = Query(None, alias="key", min_length=1, max_length=64),
+) -> Response:
+    # Print discord_id, username, and key
+    print(discord_id, username, key)
+    if not discord_id or not username or not key:
+        # 400 bad request, response = "Missing required parameters!"
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "Missing required parameters!"
+                },
+            },
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # check did discord id is exist in users table (please check by database)
+    # Please use app.state.services.database.fetch_val
+    user_info = await app.state.services.database.fetch_val(
+        "SELECT * FROM users WHERE discord_id = :discord_id",
+        {"discord_id": discord_id},
+    )
+    print(user_info)
+    if not user_info:
+        # 404 not found, response = "User not found!"
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "User not found!"
+                },
+            },
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    user_info = await players_repo.fetch_one(id=user_info)
+
+    if not user_info["priv"] & Privileges.STAFF:
+        # 403 forbidden, response = "You are not a Staff!"
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "You are not a Staff!"
+                },
+            },
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+
+    if key != app.settings.OSU_API_KEY:
+        # Sucess = false, 403 forbidden, response = "Invalid osu!api key"
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "Invalid osu!api key!"
+                },
+            },
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    # Check did player is already whitelisted or not
+    # Please use app.state.services.database.fetch_val
+    # If status = 0, that mean player is not whitelisted
+    # If status = 1, that mean player is whitelisted
+    # We will whitelist only if status is 0
+    target = await app.state.sessions.players.from_cache_or_sql(name=username)
+    if not target:
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "Player not found!"
+                },
+            },
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    # If target player is already whitelisted, return error
+    if target.priv & Privileges.WHITELISTED:
+        return ORJSONResponse(
+            {
+                "success": False,
+                "response": {
+                    "message": "Player is already whitelisted!"
+                },
+            },
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    # Whitelist player
+    # Getting admin info
+    await target.add_privs(Privileges.WHITELISTED)
+    # Return success
+    return ORJSONResponse(
+        {
+            "success": True,
+            "response": {
+                "message": "Player has been whitelisted!"
+            },
+        },
+        status_code=status.HTTP_200_OK,
+    )
+# Give me example of api
+# /whitelist_player?discord_id=736163902835916880&username=Koi
+
+# Can you tell me, which api we add for serveal days? list please
+# /love_beatmap, /rank_beatmap, /cancel_beatmap, /restrict_player, /unrestrict_player, /whitelist_player   

@@ -19,3 +19,6 @@ poetry.toml
 .coverage
 logging.yaml
 logs.log
+*.key
+*.pem
+todo.txt

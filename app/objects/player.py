@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import asyncio
 import time
 import uuid
@@ -42,6 +43,7 @@ from app.state.services import Geolocation
 from app.utils import escape_enum
 from app.utils import make_safe_name
 from app.utils import pymysql_encode
+from app.discord import Webhook, Embed
 
 if TYPE_CHECKING:
     from app.constants.privileges import ClanPrivileges
@@ -226,6 +228,9 @@ class Player:
         is_bot_client: bool = False,
         is_tourney_client: bool = False,
         api_key: str | None = None,
+        votes: int | None = None,
+        discord_id: str | None = None,
+        old_name: str | None = None,
     ) -> None:
         if geoloc is None:
             geoloc = {
@@ -252,6 +257,7 @@ class Player:
         self.is_bot_client = is_bot_client
         self.is_tourney_client = is_tourney_client
         self.api_key = api_key
+        self.votes = votes
 
         # avoid enqueuing packets to bot accounts.
         if self.is_bot_client:
@@ -476,10 +482,22 @@ class Player:
 
         log(log_msg, Ansi.LRED)
 
-        webhook_url = app.settings.DISCORD_AUDIT_LOG_WEBHOOK
-        if webhook_url:
-            webhook = Webhook(webhook_url, content=log_msg)
-            asyncio.create_task(webhook.post())
+        # getting lastest score id by execute sql query "SELECT id FROM scores WHERE userid = 55 ORDER BY id DESC LIMIT 1;"
+        lastest_score = await app.state.services.database.fetch_val(
+                "SELECT id FROM scores WHERE userid = :userid ORDER BY id DESC LIMIT 1",
+                {"userid": self.id}
+            )
+        if app.settings.DISCORD_AUDIT_LOG_WEBHOOK:
+            # getting lastest score id from userid in scores table
+            embed = Embed(title="Restriction", timestamp=datetime.datetime.utcnow(), color=16711680)
+            embed.add_field("Restricted Player", f"[{self.name}]({self.url})", True)
+            embed.add_field("Reason", reason, True)
+            # lastest player score
+            embed.add_field("Latest Score", f"https://{app.settings.DOMAIN}/scores/{lastest_score}", True)
+            embed.set_footer(text="Moderation Tools")
+            embed.set_author(name=admin.name, icon_url=admin.avatar_url, url=admin.url)
+            webhook = Webhook(app.settings.DISCORD_AUDIT_LOG_WEBHOOK, embeds=[embed])
+            await asyncio.create_task(webhook.post())
 
         # refresh their client state
         if self.is_online:
@@ -513,10 +531,14 @@ class Player:
 
         log(log_msg, Ansi.LRED)
 
-        webhook_url = app.settings.DISCORD_AUDIT_LOG_WEBHOOK
-        if webhook_url:
-            webhook = Webhook(webhook_url, content=log_msg)
-            asyncio.create_task(webhook.post())
+        if app.settings.DISCORD_AUDIT_LOG_WEBHOOK:
+            embed = Embed(title="Unrestriction", timestamp=datetime.datetime.utcnow(), color=41216)
+            embed.add_field("Restricted Player", f"[{self.name}]({self.url})", True)
+            embed.add_field("Reason", reason, True)
+            embed.set_footer(text="Moderation Tools")
+            embed.set_author(name=admin.name, icon_url=admin.avatar_url, url=admin.url)
+            webhook = Webhook(app.settings.DISCORD_AUDIT_LOG_WEBHOOK, embeds=[embed])
+            await asyncio.create_task(webhook.post())
 
         if self.is_online:
             # log the user out if they're offline, this
@@ -549,6 +571,16 @@ class Player:
         if self.match:
             self.leave_match()
 
+        if app.settings.DISCORD_AUDIT_LOG_WEBHOOK:
+            embed = Embed(title="Silence", timestamp=datetime.datetime.utcnow(), color=14964310)
+            embed.add_field("Silenced Player", f"[{self.name}]({self.url})", True)
+            embed.add_field("Reason", reason, True)
+            embed.add_field("Duration", timeago.format(self.silence_end).removeprefix("in "), True)
+            embed.set_footer(text="Moderation Tools")
+            embed.set_author(name=admin.name, icon_url=admin.avatar_url, url=admin.url)
+            webhook = Webhook(app.settings.DISCORD_AUDIT_LOG_WEBHOOK, embeds=[embed])
+            await asyncio.create_task(webhook.post())
+        
         log(f"Silenced {self}.", Ansi.LCYAN)
 
     async def unsilence(self, admin: Player, reason: str) -> None:
@@ -570,6 +602,15 @@ class Player:
         # inform the user's client
         self.enqueue(app.packets.silence_end(0))
 
+        if app.settings.DISCORD_AUDIT_LOG_WEBHOOK:
+            embed = Embed(title="Unsilence", timestamp=datetime.datetime.utcnow(), color=5694569)
+            embed.add_field("Unsilenced Player", f"[{self.name}]({self.url})", True)
+            embed.add_field("Reason", reason, True)
+            embed.set_footer(text="Moderation Tools")
+            embed.set_author(name=admin.name, icon_url=admin.avatar_url, url=admin.url)
+            webhook = Webhook(app.settings.DISCORD_AUDIT_LOG_WEBHOOK, embeds=[embed])
+            await asyncio.create_task(webhook.post())
+                    
         log(f"Unsilenced {self}.", Ansi.LCYAN)
 
     def join_match(self, match: Match, passwd: str) -> bool:

@@ -94,9 +94,10 @@ country_codes = {
     "us": 225, "uy": 226, "uz": 227, "va": 228, "vc": 229, "ve": 230, "vg": 231, "vi": 232,
     "vn": 233, "vu": 234, "wf": 235, "ws": 236, "ye": 237, "yt": 238, "rs": 239, "za": 240,
     "zm": 241, "me": 242, "zw": 243, "xx": 244, "a2": 245, "o1": 246, "ax": 247, "gg": 248,
-    "im": 249, "je": 250, "bl": 251, "mf": 252,
+    "im": 249, "je": 250, "bl": 251, "mf": 252, "01" : 253, "02" : 254, "03" : 255,
 }
 # fmt: on
+# TODO: 01, 02 and 03 country codes may remove soon after clans/gulid update.
 
 
 class IPResolver:
@@ -315,6 +316,9 @@ class Version:
 
     @classmethod
     def from_str(cls, s: str) -> Version | None:
+        # Ensure proper indentation
+        s = s.split("+")[0]  # Keep only the part before the '+'
+
         split = s.split(".")
         if len(split) == 3:
             return cls(
@@ -322,8 +326,9 @@ class Version:
                 minor=int(split[1]),
                 micro=int(split[2]),
             )
+        return None  # Return None if the version string is not valid
 
-        return None
+
 
 
 async def _get_latest_dependency_versions() -> AsyncGenerator[

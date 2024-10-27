@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import datetime
 import copy
+import time
 import hashlib
 import random
 import secrets
@@ -73,6 +75,7 @@ from app.usecases import achievements as achievements_usecases
 from app.usecases import user_achievements as user_achievements_usecases
 from app.utils import escape_enum
 from app.utils import pymysql_encode
+from sqlalchemy import update
 
 BEATMAPS_PATH = SystemPath.cwd() / ".data/osu"
 REPLAYS_PATH = SystemPath.cwd() / ".data/osr"
@@ -1783,3 +1786,50 @@ async def difficultyRatingHandler(request: Request) -> Response:
         url=f"https://osu.ppy.sh{request['path']}",
         status_code=status.HTTP_307_TEMPORARY_REDIRECT,
     )
+
+@router.get("/vote-callback")
+async def voteCallback(username: str, key: str, request: Request) -> Response:
+    # validate the key
+    if key != app.settings.OSU_SERVER_LIST_API_KEY:
+        log("Received vote-callback with invalid key.", Ansi.LRED)
+        return Response(
+            content=b"Invalid API key.",
+            status_code=status.HTTP_401_UNAUTHORIZED
+        )
+    
+    # find the user
+    if not (target := await app.state.sessions.players.from_cache_or_sql(name=username)):
+        log(f"Vote received from unknown user '{username}'", Ansi.LYELLOW)
+        return Response(
+            content=b"User not found.",
+            status_code=status.HTTP_404_NOT_FOUND
+        )
+    
+    log(f"Vote received from {target}!", Ansi.LCYAN)
+    
+    # Ensure target.votes is not None
+    if target.votes is None:
+        target.votes = 0
+    
+    target.send_bot(f"Thank you for voting! Current progress: {(target.votes % 1) + 1}/1 votes ({target.votes + 1} total)")
+    
+    # add the vote to the user
+    target.votes += 1
+    await users_repo.partial_update(target.id, votes=target.votes)
+
+    # if 5 votes was reached, reward the user with supporter
+    if target.votes % 1 == 0:
+        log(f"{target} receives voter and supporter status through voting 1 time.", Ansi.LMAGENTA)
+        target.send_bot(f"You received a voter and supporter status for 1 day!")
+        
+        timespan = 1 * 24 * 60 * 60 + (int(time.time()) if target.donor_end < time.time() else target.donor_end)
+        target.donor_end = timespan
+        await app.state.services.database.execute(
+            "UPDATE users SET donor_end = :end WHERE id = :user_id",
+            {"end": timespan, "user_id": target.id},
+        )
+
+        await target.add_privs(Privileges.SUPPORTER)
+        await target.add_privs(Privileges.VOTER)
+
+    return Response(status_code=status.HTTP_200_OK)

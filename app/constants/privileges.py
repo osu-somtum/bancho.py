@@ -33,7 +33,9 @@ class Privileges(IntFlag):
     MODERATOR = 1 << 12  # able to manage users (level 1).
     ADMINISTRATOR = 1 << 13  # able to manage users (level 2).
     DEVELOPER = 1 << 14  # able to manage full server app.state.
-
+    NAT = 1 << 15  # able to manage ranked/loved maps.
+    VOTER = 1 << 16  # people it vote this server
+    
     DONATOR = SUPPORTER | PREMIUM
     STAFF = MODERATOR | ADMINISTRATOR | DEVELOPER
 

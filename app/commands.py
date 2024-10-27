@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.metadata
 import os
 import pprint
@@ -64,6 +65,10 @@ from app.repositories import tourney_pool_maps as tourney_pool_maps_repo
 from app.repositories import tourney_pools as tourney_pools_repo
 from app.repositories import users as users_repo
 from app.usecases.performance import ScoreParams
+from app.repositories.achievements import Achievement
+from app.usecases import achievements as achievements_usecases
+from app.usecases import user_achievements as user_achievements_usecases
+from app.discord import Webhook, Embed
 
 if TYPE_CHECKING:
     from app.objects.channel import Channel
@@ -125,6 +130,9 @@ class CommandSet:
         return wrapper
 
 
+def format_achievement_string(file: str, name: str, description: str) -> str:
+    return f"{file}+{name}+{description}"
+
 mp_commands = CommandSet("mp", "Multiplayer commands.")
 pool_commands = CommandSet("pool", "Mappool commands.")
 clan_commands = CommandSet("clan", "Clan commands.")
@@ -162,7 +170,35 @@ def command(
 # The commands below are not considered dangerous,
 # and are granted to any unbanned players.
 """
+@command(Privileges.UNRESTRICTED)
+async def vote(ctx: Context) -> str | None:
+    """Displays the current vote progression of the player."""
+    votes = ctx.player.votes
+    if votes is None:
+        return "No votes recorded for this player."
+    return f"Every votes you receive 1 day of voter and supporter status. Current progress: {votes % 1}/1 votes ({votes} total)\nClick [https://osu-server-list.com/server/somtum/vote here] to vote!"
 
+# New command to able to see unlocked achievements/medal
+@command(Privileges.UNRESTRICTED)
+async def medal(ctx: Context) -> str | None:
+    """Displays the current unlocked achievements of the player."""
+    
+    server_achievements = await achievements_usecases.fetch_many()
+    player_achievements = await user_achievements_usecases.fetch_many(
+                ctx.player.id,
+            )
+
+    # Create a dictionary mapping achid to name for server achievements
+    server_achievements_dict = {a['id']: a['name'] for a in server_achievements}
+
+    # Get medal names for player achievements
+    player_medals = [server_achievements_dict[a['achid']] for a in player_achievements if a['achid'] in server_achievements_dict]
+
+    # Format the medal names into a string
+    player_medals_str = ", ".join(player_medals)
+    return f"You have unlocked the following achievements: {player_medals_str}"
+    
+    
 
 @command(Privileges.UNRESTRICTED, aliases=["", "h"], hidden=True)
 async def _help(ctx: Context) -> str | None:
@@ -260,7 +296,7 @@ async def reconnect(ctx: Context) -> str | None:
     return None
 
 
-@command(Privileges.SUPPORTER)
+@command(Privileges.ADMINISTRATOR, hidden=True)
 async def changename(ctx: Context) -> str | None:
     """Change your username."""
     name = " ".join(ctx.args).strip()
@@ -543,7 +579,16 @@ async def request(ctx: Context) -> str | None:
         return "You already have an active nomination request for that map."
 
     await map_requests_repo.create(map_id=bmap.id, player_id=ctx.player.id, active=True)
-
+    # Send beatmap request to #bn-talk
+    if webhook_url := app.settings.DISCORD_QUALIFIED_WEBHOOK:
+        formatted_name = f"{bmap.artist} - {bmap.title} ({bmap.creator})"
+        comment = ' '.join(ctx.args[1:]) if len(ctx.args) > 1 else 'No additional comment was specified.'
+        embed = Embed(title="", description=f"[{formatted_name}]({bmap.url}) has been requested for {ctx.args[0]} by {ctx.player.name}.\n{comment}", timestamp=datetime.utcnow(), color=0)
+        embed.set_author(name=ctx.player.name, icon_url=ctx.player.avatar_url, url=ctx.player.url)
+        embed.set_image(url=f"https://assets.ppy.sh/beatmaps/{bmap.set_id}/covers/card.jpg")
+        embed.set_footer(text="Nomination Tools")
+        webhook = Webhook(webhook_url, embeds=[embed])
+        await asyncio.create_task(webhook.post())
     return "Request submitted."
 
 
@@ -611,22 +656,24 @@ async def requests(ctx: Context) -> str | None:
     return "\n".join(l)
 
 
-_status_str_to_int_map = {"unrank": 0, "rank": 2, "love": 5}
+_status_str_to_int_map = {"unrank": 0, "rank": 2, "love": 5, "qualified": 4}
 
 
 def status_to_id(s: str) -> int:
     return _status_str_to_int_map[s]
 
 
-@command(Privileges.NOMINATOR)
+# keep in mind, NAT have same privileges as BN
+@command(Privileges.NAT)
+# clone command !map like Nomination Team
 async def _map(ctx: Context) -> str | None:
     """Changes the ranked status of the most recently /np'ed map."""
     if (
         len(ctx.args) != 2
-        or ctx.args[0] not in ("rank", "unrank", "love")
+        or ctx.args[0] not in ("rank", "unrank", "love", "qualified")
         or ctx.args[1] not in ("set", "map")
     ):
-        return "Invalid syntax: !map <rank/unrank/love> <map/set>"
+        return "Invalid syntax: !map <rank/unrank/love/qualified> <map/set>"
 
     if ctx.player.last_np is None or time.time() >= ctx.player.last_np["timeout"]:
         return "Please /np a map first!"
@@ -637,34 +684,167 @@ async def _map(ctx: Context) -> str | None:
     if ctx.args[1] == "map":
         if bmap.status == new_status:
             return f"{bmap.embed} is already {new_status!s}!"
+    # if beatmap is already rank and new status is love, please return
+    if ctx.args[0] in ["qualified"] and bmap.status == RankedStatus.Ranked:
+        return f"{bmap.embed} is already ranked! and no matter to change to qualified, please ask in #bn-talk"
     else:  # ctx.args[1] == "set"
         if all(map.status == new_status for map in bmap.set.maps):
             return f"All maps from the set are already {new_status!s}!"
 
-    # update sql & cache based on scope
-    # XXX: not sure if getting md5s from sql
-    # for updating cache would be faster?
-    # surely this will not scale as well...
+    # check if beatmap set_id is already voted in redis (vote:userid:set_id:votecount), if exist add count, if doesn't exist create new key, if vote number is 2, change status to qualified
+    if ctx.args[0] in ["qualified"]:
+        # if request is rank but beatmap is not qualified, return
+        if ctx.args[0] in ["rank"] and bmap.status != RankedStatus.Qualified:
+            return f"{bmap.embed} is not qualified yet!"
+        else:
+            vote_key = f"vote:{ctx.player.id}:{bmap.set_id}"
+            # Define the key pattern
+            vote_key_map = f"vote:*:{bmap.set_id}"
+            vote_key_pattern = f"vote:{ctx.player.id}:{bmap.set_id}"
 
-    async with app.state.services.database.transaction():
+            # Use scan_iter to get an async iterator of keys that match the pattern
+            vote_keys = app.state.services.redis.scan_iter(match=vote_key_pattern)
+            vote_maps = app.state.services.redis.scan_iter(match=vote_key_map)
+            # Create an empty list to store the keys
+            vote_keys_list = []
+            vote_maps_list = []
+            # Use an async for loop to iterate over the async generator
+            async for key in vote_keys:
+                vote_keys_list.append(key)
+            async for key in vote_maps:
+                vote_maps_list.append(key)
+
+            # Initialize vote_count
+            vote_count = None
+
+            # Check if the list is empty
+            if vote_keys_list:
+                if app.settings.DEVELOPER_MODE == True:
+                    pass
+                else:
+                    return "You have already voted for this set."
+
+            # Get the vote count from Redis
+            vote_count = len(vote_maps_list)
+            if vote_count is None:
+                await app.state.services.redis.set(vote_key, 1)
+                vote_count = '1'
+            elif isinstance(vote_count, int):
+                await app.state.services.redis.incr(vote_key)
+                vote_count = str(vote_count + 1)
+            else:
+                return "Error: vote count is not an integer."
+            if int(vote_count) == 2:
+                # if vote number is 2, use code in below
+                if ctx.args[1] == "set":
+                    # update all maps in the set
+                    for _bmap in bmap.set.maps:
+                        await maps_repo.partial_update(_bmap.id, status=new_status, frozen=True)
+                        # make sure cache and db are synced about the newest change
+                    for _bmap in app.state.cache.beatmapset[bmap.set_id].maps:
+                        _bmap.status = new_status
+                        _bmap.frozen = True
+                    # select all map ids for clearing map requests.
+                    map_ids = [
+                        row["id"]
+                        for row in await maps_repo.fetch_many(
+                            set_id=bmap.set_id,
+                        )
+                    ]
+                    # add qualified date to database (change_date)
+                    await app.state.services.database.execute(
+                        "UPDATE maps SET change_date = now() WHERE set_id = :set_id",
+                        {"set_id": bmap.set_id}
+                    )
+                    if new_status == RankedStatus.Ranked:
+                        await app.state.services.database.execute(
+                            "DELETE FROM scores WHERE map_md5 IN :map_md5s",
+                            {"map_md5s": [bmap.md5 for bmap in bmap.set.maps]},
+                        )
+                    # delete vote from redis key
+                    await app.state.services.redis.delete(vote_key)
+                    if webhook_url := app.settings.DISCORD_NOMINATION_WEBHOOK:
+                        name = f"{bmap.artist} - {bmap.title} ({bmap.creator}) {f'[{bmap.version}]' if ctx.args[1] == 'map' else ''}"
+                        color = 52478 if new_status == RankedStatus.Ranked else 16738218 if new_status == RankedStatus.Loved else 0
+                        embed = Embed(title="", description=f"[{name}]({bmap.url}) is now {'ranked' if new_status == RankedStatus.Ranked else 'loved' if new_status == RankedStatus.Loved else 'qualified' if new_status == RankedStatus.Qualified else 'unranked'}!", timestamp=datetime.utcnow(), color=color)
+                        embed.set_author(name=ctx.player.name, icon_url=ctx.player.avatar_url, url=ctx.player.url)
+                        embed.set_image(url=f"https://assets.ppy.sh/beatmaps/{bmap.set_id}/covers/card.jpg")
+                        embed.set_footer(text="Nomination Tools")
+                        webhook = Webhook(webhook_url, embeds=[embed])
+                        await asyncio.create_task(webhook.post())
+                    if webhook_url := app.settings.DISCORD_QUALIFIED_WEBHOOK:
+                        name = f"{bmap.artist} - {bmap.title} ({bmap.creator}) {f'[{bmap.version}]' if ctx.args[1] == 'map' else ''}"
+                        embed = Embed(title="", description=f"[{name}]({bmap.url}) has 2/2 votes for qualification. Now qualified!", timestamp=datetime.utcnow(), color=0)
+                        embed.set_author(name=ctx.player.name, icon_url=ctx.player.avatar_url, url=ctx.player.url)
+                        embed.set_image(url=f"https://assets.ppy.sh/beatmaps/{bmap.set_id}/covers/card.jpg")
+                        embed.set_footer(text="Nomination Tools")
+                        webhook = Webhook(webhook_url, embeds=[embed])
+                        await asyncio.create_task(webhook.post())
+                else:
+                    # update only map
+                    await maps_repo.partial_update(bmap.id, status=new_status, frozen=True)
+
+                    # make sure cache and db are synced about the newest change
+                    if bmap.md5 in app.state.cache.beatmap:
+                        app.state.cache.beatmap[bmap.md5].status = new_status
+                        app.state.cache.beatmap[bmap.md5].frozen = True
+
+                        map_ids = [bmap.id]
+
+                    # deactivate rank requests for all ids
+                    await app.state.services.database.execute(
+                        "UPDATE map_requests SET active = 0 WHERE map_id IN :map_ids",
+                        {"map_ids": map_ids},
+                    )
+                    if webhook_url := app.settings.DISCORD_NOMINATION_WEBHOOK:
+                        name = f"{bmap.artist} - {bmap.title} ({bmap.creator}) {f'[{bmap.version}]' if ctx.args[1] == 'map' else ''}"
+                        color = 52478 if new_status == RankedStatus.Ranked else 16738218 if new_status == RankedStatus.Loved else 0
+                        embed = Embed(title="", description=f"[{name}]({bmap.url}) is now {'ranked' if new_status == RankedStatus.Ranked else 'loved' if new_status == RankedStatus.Loved else 'qualified' if new_status == RankedStatus.Qualified else 'unranked'}!", timestamp=datetime.utcnow(), color=color)
+                        embed.set_author(name=ctx.player.name, icon_url=ctx.player.avatar_url, url=ctx.player.url)
+                        embed.set_image(url=f"https://assets.ppy.sh/beatmaps/{bmap.set_id}/covers/card.jpg")
+                        embed.set_footer(text="Nomination Tools")
+                        webhook = Webhook(webhook_url, embeds=[embed])
+                        await asyncio.create_task(webhook.post())
+                    if webhook_url := app.settings.DISCORD_QUALIFIED_WEBHOOK:
+                        name = f"{bmap.artist} - {bmap.title} ({bmap.creator}) {f'[{bmap.version}]' if ctx.args[1] == 'map' else ''}"
+                        embed = Embed(title="", description=f"[{name}]({bmap.url}) has 2/2 votes for qualification. Now qualified!", timestamp=datetime.utcnow(), color=0)
+                        embed.set_author(name=ctx.player.name, icon_url=ctx.player.avatar_url, url=ctx.player.url)
+                        embed.set_image(url=f"https://assets.ppy.sh/beatmaps/{bmap.set_id}/covers/card.jpg")
+                        embed.set_footer(text="Nomination Tools")
+                        webhook.content = content = f"https://osu.ppy.sh/beatmapsets/{bmap.set_id}"
+                        await asyncio.create_task(webhook.post())
+                return f"[{bmap.set.url} {bmap.artist} - {bmap.title}] updated to {new_status!s}."
+            else:
+                await app.state.services.redis.set(vote_key, vote_count)
+                # tell user like vote!, need 1 more vote to change status to qualified
+                # discord webhook to nomination channel like this user is vote for qualified
+                if webhook_url := app.settings.DISCORD_QUALIFIED_WEBHOOK:
+                    name = f"{bmap.artist} - {bmap.title} ({bmap.creator}) {f'[{bmap.version}]' if ctx.args[1] == 'map' else ''}"
+                    embed = Embed(title="", description=f"[{name}]({bmap.url}) has 1/2 votes for {ctx.args[0]}. One more vote is needed! (for discord vote: /vote {bmap.set_id} or !vote with reply this message!", timestamp=datetime.utcnow(), color=0)
+                    embed.set_author(name=ctx.player.name, icon_url=ctx.player.avatar_url, url=ctx.player.url)
+                    embed.set_image(url=f"https://assets.ppy.sh/beatmaps/{bmap.set_id}/covers/card.jpg")
+                    embed.set_footer(text="Nomination Tools")
+                    webhook = Webhook(webhook_url, embeds=[embed])
+                    webhook.content = content = f"https://osu.ppy.sh/beatmapsets/{bmap.set_id}"
+                    await asyncio.create_task(webhook.post())
+                return f"Vote success! Need 1 more vote to change status to {ctx.args[0]}."
+        # else if new status is love, no need to vote, just change status to loved
+    else:
         if ctx.args[1] == "set":
             # update all maps in the set
             for _bmap in bmap.set.maps:
                 await maps_repo.partial_update(_bmap.id, status=new_status, frozen=True)
-
-            # make sure cache and db are synced about the newest change
+                # make sure cache and db are synced about the newest change
             for _bmap in app.state.cache.beatmapset[bmap.set_id].maps:
                 _bmap.status = new_status
                 _bmap.frozen = True
-
             # select all map ids for clearing map requests.
-            modified_beatmap_ids = [
+            map_ids = [
                 row["id"]
                 for row in await maps_repo.fetch_many(
                     set_id=bmap.set_id,
                 )
             ]
-
         else:
             # update only map
             await maps_repo.partial_update(bmap.id, status=new_status, frozen=True)
@@ -674,12 +854,197 @@ async def _map(ctx: Context) -> str | None:
                 app.state.cache.beatmap[bmap.md5].status = new_status
                 app.state.cache.beatmap[bmap.md5].frozen = True
 
-            modified_beatmap_ids = [bmap.id]
+                map_ids = [bmap.id]
 
-        # deactivate rank requests for all ids
-        await map_requests_repo.mark_batch_as_inactive(map_ids=modified_beatmap_ids)
+            # deactivate rank requests for all ids
+            await app.state.services.database.execute(
+                "UPDATE map_requests SET active = 0 WHERE map_id IN :map_ids",
+                {"map_ids": map_ids},
+            )
+            # discord webhook
+        if webhook_url := app.settings.DISCORD_NOMINATION_WEBHOOK:
+            name = f"{bmap.artist} - {bmap.title} ({bmap.creator}) {f'[{bmap.version}]' if ctx.args[1] == 'map' else ''}"
+            color = 52478 if new_status == RankedStatus.Ranked else 16738218 if new_status == RankedStatus.Loved else 0
+            embed = Embed(title="", description=f"[{name}]({bmap.url}) is now {'ranked' if new_status == RankedStatus.Ranked else 'loved' if new_status == RankedStatus.Loved else 'qualified' if new_status == RankedStatus.Qualified else 'unranked'}!", timestamp=datetime.utcnow(), color=color)
+            embed.set_author(name=ctx.player.name, icon_url=ctx.player.avatar_url, url=ctx.player.url)
+            embed.set_image(url=f"https://assets.ppy.sh/beatmaps/{bmap.set_id}/covers/card.jpg")
+            embed.set_footer(text="Nomination Tools")
+            webhook = Webhook(webhook_url, embeds=[embed])
+            await asyncio.create_task(webhook.post())
+        return f"[{bmap.set.url} {bmap.artist} - {bmap.title}] updated to {new_status!s}."
+    
 
-    return f"{bmap.embed} updated to {new_status!s}."
+@command(Privileges.NOMINATOR)
+async def _map(ctx: Context) -> str | None:
+    """Changes the ranked status of the most recently /np'ed map."""
+    if (
+        len(ctx.args) != 2
+        or ctx.args[0] not in ("qualified")
+        or ctx.args[1] not in ("set", "map")
+    ):
+        return "Invalid syntax: !map <qualified> <map/set>"
+       
+
+    if ctx.player.last_np is None or time.time() >= ctx.player.last_np["timeout"]:
+        return "Please /np a map first!"
+
+    bmap = ctx.player.last_np["bmap"]
+    new_status = RankedStatus(status_to_id(ctx.args[0]))
+    
+    if ctx.args[1] == "map":
+        if bmap.status == new_status:
+            return f"{bmap.embed} is already {new_status!s}!"
+    # if beatmap is already rank and new status is love, please return
+    if ctx.args[0] in ["qualified"] and bmap.status == RankedStatus.Ranked:
+        return f"{bmap.embed} is already ranked! and no matter to change to qualified, please ask in #bn-talk"
+    else:  # ctx.args[1] == "set"
+        if all(map.status == new_status for map in bmap.set.maps):
+           return f"All maps from the set are already {new_status!s}!"
+
+
+
+
+    # check if beatmap set_id is already voted in redis (vote:userid:set_id:votecount), if exist add count, if doesn't exist create new key, if vote number is 2, change status to qualified
+    if ctx.args[0] in ["qualified"]:
+        vote_key = f"vote:{ctx.player.id}:{bmap.set_id}"
+                # Define the key pattern
+        vote_key_map = f"vote:*:{bmap.set_id}"
+        vote_key_pattern = f"vote:{ctx.player.id}:{bmap.set_id}"
+
+        # Use scan_iter to get an async iterator of keys that match the pattern
+        vote_keys = app.state.services.redis.scan_iter(match=vote_key_pattern)
+        vote_maps = app.state.services.redis.scan_iter(match=vote_key_map)
+        # Create an empty list to store the keys
+        vote_keys_list = []
+        vote_maps_list = []
+        # Use an async for loop to iterate over the async generator
+        async for key in vote_keys:
+            vote_keys_list.append(key)
+        async for key in vote_maps:
+            vote_maps_list.append(key)
+
+        # Initialize vote_count
+        vote_count = None
+
+        # Check if the list is empty
+        if vote_keys_list:
+            if app.settings.DEVELOPER_MODE == True:
+                pass
+            else:
+                return "You have already voted for this set."
+
+        # Get the vote count from Redis
+        vote_count = len(vote_maps_list)
+        print(vote_count)
+        if vote_count is None:
+            await app.state.services.redis.set(vote_key, 1)
+            vote_count = '1'
+        elif isinstance(vote_count, int):
+            await app.state.services.redis.incr(vote_key)
+            vote_count = str(vote_count + 1)
+        else:
+            return "Error: vote count is not an integer."
+        print(vote_count)
+        if int(vote_count) == 2:
+        # if vote number is 2, use code in below
+            async with app.state.services.database.connection() as db_conn:
+                if ctx.args[1] == "set":
+                # update all maps in the set
+                    # add qualified date to database (change_date)
+                    await db_conn.execute(
+                        "UPDATE maps SET change_date = now() WHERE set_id = :set_id",
+                        {"set_id": bmap.set_id}
+                    )
+                    for _bmap in bmap.set.maps:
+                        await maps_repo.partial_update(_bmap.id, status=new_status, frozen=True)
+                        # make sure cache and db are synced about the newest change
+                    for _bmap in app.state.cache.beatmapset[bmap.set_id].maps:
+                        _bmap.status = new_status
+                        _bmap.frozen = True
+                    # select all map ids for clearing map requests.
+                    map_ids = [
+                        row["id"]
+                    for row in await maps_repo.fetch_many(
+                        set_id=bmap.set_id,
+                        )
+                    ]
+                    # if new status is ranked, wipe all scores for the maps
+                    if new_status == RankedStatus.Ranked:
+                        await db_conn.execute(
+                            "DELETE FROM scores WHERE map_md5 IN :map_md5s",
+                            {"map_md5s": [bmap.md5 for bmap in bmap.set.maps]},
+                        )
+                    # delete vote from redis key
+                    await app.state.services.redis.delete(vote_key)
+                    if webhook_url := app.settings.DISCORD_NOMINATION_WEBHOOK:
+                            name = f"{bmap.artist} - {bmap.title} ({bmap.creator}) {f'[{bmap.version}]' if ctx.args[1] == 'map' else ''}"
+                            color = 52478 if new_status == RankedStatus.Ranked else 16738218 if new_status == RankedStatus.Loved else 0
+                            embed = Embed(title="", description=f"[{name}]({bmap.url}) is now {'ranked' if new_status == RankedStatus.Ranked else 'loved' if new_status == RankedStatus.Loved else 'qualified' if new_status == RankedStatus.Qualified else 'unranked'}!", timestamp=datetime.utcnow(), color=color)
+                            embed.set_author(name=ctx.player.name, icon_url=ctx.player.avatar_url, url=ctx.player.url)
+                            embed.set_image(url=f"https://assets.ppy.sh/beatmaps/{bmap.set_id}/covers/card.jpg")
+                            embed.set_footer(text="Nomination Tools")
+                            webhook = Webhook(webhook_url, embeds=[embed])
+                            await asyncio.create_task(webhook.post())
+                    if webhook_url := app.settings.DISCORD_QUALIFIED_WEBHOOK:
+                            name = f"{bmap.artist} - {bmap.title} ({bmap.creator}) {f'[{bmap.version}]' if ctx.args[1] == 'map' else ''}"
+                            embed = Embed(title="", description=f"[{name}]({bmap.url}) has 2/2 votes for qualification. Now qualified!", timestamp=datetime.utcnow(), color=0)
+                            embed.set_author(name=ctx.player.name, icon_url=ctx.player.avatar_url, url=ctx.player.url)
+                            embed.set_image(url=f"https://assets.ppy.sh/beatmaps/{bmap.set_id}/covers/card.jpg")
+                            embed.set_footer(text="Nomination Tools")
+                            webhook = Webhook(webhook_url, embeds=[embed])
+                            webhook.content = content = f"https://osu.ppy.sh/beatmapsets/{bmap.set_id}"
+                            await asyncio.create_task(webhook.post())  
+                else:
+                 # update only map
+                    await maps_repo.partial_update(bmap.id, status=new_status, frozen=True)
+
+                    # make sure cache and db are synced about the newest change
+                    if bmap.md5 in app.state.cache.beatmap:
+                        app.state.cache.beatmap[bmap.md5].status = new_status
+                        app.state.cache.beatmap[bmap.md5].frozen = True
+
+                        map_ids = [bmap.id]
+
+                    # deactivate rank requests for all ids
+                    await db_conn.execute(
+                        "UPDATE map_requests SET active = 0 WHERE map_id IN :map_ids",
+                        {"map_ids": map_ids},
+                            )
+                    webhook_url = app.settings.DISCORD_NOMINATION_WEBHOOK
+                    name = f"{bmap.artist} - {bmap.title} ({bmap.creator}) {f'[{bmap.version}]' if ctx.args[1] == 'map' else ''}"
+                    color = 52478 if new_status == RankedStatus.Ranked else 16738218 if new_status == RankedStatus.Loved else 0
+                    embed = Embed(title="", description=f"[{name}]({bmap.url}) is now {'ranked' if new_status == RankedStatus.Ranked else 'loved' if new_status == RankedStatus.Loved else 'qualified' if new_status == RankedStatus.Qualified else 'unranked'}!", timestamp=datetime.utcnow(), color=color)
+                    embed.set_author(name=ctx.player.name, icon_url=ctx.player.avatar_url, url=ctx.player.url)
+                    embed.set_image(url=f"https://assets.ppy.sh/beatmaps/{bmap.set_id}/covers/card.jpg")
+                    embed.set_footer(text="Nomination Tools")
+                    webhook = Webhook(webhook_url, embeds=[embed])
+                    await asyncio.create_task(webhook.post())
+                    webhook_url = app.settings.DISCORD_QUALIFIED_WEBHOOK
+                    name = f"{bmap.artist} - {bmap.title} ({bmap.creator}) {f'[{bmap.version}]' if ctx.args[1] == 'map' else ''}"
+                    embed = Embed(title="", description=f"[{name}]({bmap.url}) has 2/2 votes for qualification. Now qualified! (for rank: /rank {bmap.set_id})", timestamp=datetime.utcnow(), color=0)
+                    embed.set_author(name=ctx.player.name, icon_url=ctx.player.avatar_url, url=ctx.player.url)
+                    embed.set_image(url=f"https://assets.ppy.sh/beatmaps/{bmap.set_id}/covers/card.jpg")
+                    embed.set_footer(text="Nomination Tools")
+                    webhook = Webhook(webhook_url, embeds=[embed])
+                    await asyncio.create_task(webhook.post())
+                                
+                return f"[{bmap.set.url} {bmap.artist} - {bmap.title}] updated to {new_status!s}."
+        else:
+            await app.state.services.redis.set(vote_key, vote_count)
+            # tell user like vote!, need 1 more vote to change status to qualified
+            # discord webhook to nomination channel like this user is vote for qualified
+            if webhook_url := app.settings.DISCORD_QUALIFIED_WEBHOOK:
+                name = f"{bmap.artist} - {bmap.title} ({bmap.creator}) {f'[{bmap.version}]' if ctx.args[1] == 'map' else ''}"
+                embed = Embed(title="", description=f"[{name}]({bmap.url}) has 1/2 votes for qualification. One more vote is needed! (for discord vote: /vote {bmap.set_id} or !vote with reply this message!", timestamp=datetime.utcnow(), color=0)
+                embed.set_author(name=ctx.player.name, icon_url=ctx.player.avatar_url, url=ctx.player.url)
+                embed.set_image(url=f"https://assets.ppy.sh/beatmaps/{bmap.set_id}/covers/card.jpg")
+                embed.set_footer(text="Nomination Tools")
+                webhook = Webhook(webhook_url, f'https://osu.ppy.sh/beatmapsets/{bmap.set_id}', embeds=[embed])
+                webhook.content = content = f"https://osu.ppy.sh/beatmapsets/{bmap.set_id}"
+                await asyncio.create_task(webhook.post())        
+            return f"Vote success! Need 1 more vote to change status to qualified"
+
+
 
 
 """ Mod commands
@@ -894,22 +1259,33 @@ async def user(ctx: Context) -> str | None:
 async def restrict(ctx: Context) -> str | None:
     """Restrict a specified player's account, with a reason."""
     if len(ctx.args) < 2:
-        return "Invalid syntax: !restrict <name> <reason>"
+        return "Invalid syntax: !restrict <name/id> <reason>"
 
     # find any user matching (including offline).
+    # try to find by name first, if not found, try by id.
     target = await app.state.sessions.players.from_cache_or_sql(name=ctx.args[0])
     if not target:
-        return f'"{ctx.args[0]}" not found.'
+        try:
+            target = await app.state.sessions.players.from_cache_or_sql(id=int(ctx.args[0]))
+        except ValueError:
+            return f'"{ctx.args[0]}" not found.'
 
     if target.priv & Privileges.STAFF and not ctx.player.priv & Privileges.DEVELOPER:
         return "Only developers can manage staff members."
 
     if target.restricted:
-        return f"{target} is already restricted!"
+        return f"{target.name} is already restricted!"
 
     reason = " ".join(ctx.args[1:])
-
-    if reason in SHORTHAND_REASONS:
+    if reason.startswith("*"): # custom reason
+        reason = reason[1:]
+    else: # template
+        if not reason in SHORTHAND_REASONS:
+                await target.restrict(admin=ctx.player, reason=reason)
+                # refresh their client state
+                if target.is_online:
+                    target.logout()
+                return f"{target.name} was restricted."
         reason = SHORTHAND_REASONS[reason]
 
     await target.restrict(admin=ctx.player, reason=reason)
@@ -918,7 +1294,7 @@ async def restrict(ctx: Context) -> str | None:
     if target.is_online:
         target.logout()
 
-    return f"{target} was restricted."
+    return f"{target.name} was restricted."
 
 
 @command(Privileges.ADMINISTRATOR, hidden=True)
@@ -928,9 +1304,13 @@ async def unrestrict(ctx: Context) -> str | None:
         return "Invalid syntax: !unrestrict <name> <reason>"
 
     # find any user matching (including offline).
+    # try to find by name first, if not found, try by id.
     target = await app.state.sessions.players.from_cache_or_sql(name=ctx.args[0])
     if not target:
-        return f'"{ctx.args[0]}" not found.'
+        try:
+            target = await app.state.sessions.players.from_cache_or_sql(id=int(ctx.args[0]))
+        except ValueError:
+            return f'"{ctx.args[0]}" not found.'
 
     if target.priv & Privileges.STAFF and not ctx.player.priv & Privileges.DEVELOPER:
         return "Only developers can manage staff members."
@@ -1065,6 +1445,7 @@ str_priv_dict = {
     "alumni": Privileges.ALUMNI,
     "tournament": Privileges.TOURNEY_MANAGER,
     "nominator": Privileges.NOMINATOR,
+    "nat": Privileges.NAT,
     "mod": Privileges.MODERATOR,
     "admin": Privileges.ADMINISTRATOR,
     "developer": Privileges.DEVELOPER,
